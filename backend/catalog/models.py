@@ -1,0 +1,91 @@
+from django.db import models
+from django.conf import settings
+
+# Базовая сущность для всех комплектующих
+class Component(models.Model):
+    category = models.CharField(max_length=50, verbose_name="Категория")
+    name = models.CharField(max_length=255, verbose_name="Название")
+    manufacturer = models.CharField(max_length=100, verbose_name="Производитель")
+
+    def __str__(self):
+        return f"{self.manufacturer} {self.name}"
+
+# 1. Сущность CPU (Процессор)
+class CPU(models.Model):
+    component = models.OneToOneField(Component, on_delete=models.CASCADE, primary_key=True)
+    socket = models.CharField(max_length=50, verbose_name="Сокет")
+    cores = models.IntegerField(verbose_name="Ядра")
+    threads = models.IntegerField(verbose_name="Потоки")
+    base_clock_ghz = models.FloatField(verbose_name="Базовая частота (ГГц)")
+    boost_clock_ghz = models.FloatField(verbose_name="Макс. частота (ГГц)")
+    l3_cache_mb = models.FloatField(verbose_name="L3 Кэш (МБ)")
+    tdp = models.IntegerField(verbose_name="TDP (Вт)")
+    integrated_graphics = models.BooleanField(default=False, verbose_name="Встроенная графика")
+    max_memory_gb = models.IntegerField(verbose_name="Макс. объем памяти (ГБ)")
+    memory_channels = models.IntegerField(verbose_name="Каналы памяти")
+
+# 2. Сущность Motherboard (Материнская плата)
+class Motherboard(models.Model):
+    component = models.OneToOneField(Component, on_delete=models.CASCADE, primary_key=True)
+    socket = models.CharField(max_length=50, verbose_name="Сокет")
+    chipset = models.CharField(max_length=50, verbose_name="Чипсет")
+    form_factor = models.CharField(max_length=50, verbose_name="Форм-фактор")
+    ram_slots = models.IntegerField(verbose_name="Слоты RAM")
+    ram_max_gb = models.IntegerField(verbose_name="Макс. RAM (ГБ)")
+    ram_type = models.CharField(max_length=20, verbose_name="Тип RAM")
+    ram_speed_mhz = models.IntegerField(verbose_name="Макс. частота RAM (МГц)")
+    pcie_ver = models.CharField(max_length=10, verbose_name="Версия PCIe")
+    pcie_slots = models.IntegerField(verbose_name="Слоты PCIe")
+    m2_slots = models.IntegerField(verbose_name="Слоты M.2")
+    m2_type = models.CharField(max_length=50, verbose_name="Тип M.2")
+    sata_ports = models.IntegerField(verbose_name="Порты SATA")
+    wifi = models.BooleanField(default=False, verbose_name="Wi-Fi")
+    bluetooth = models.BooleanField(default=False, verbose_name="Bluetooth")
+
+# 3. Сущность VideoCard (Видеокарта)
+class VideoCard(models.Model):
+    component = models.OneToOneField(Component, on_delete=models.CASCADE, primary_key=True)
+    chipset = models.CharField(max_length=100, verbose_name="Чипсет ГП")
+    capacity_gb = models.IntegerField(verbose_name="Объем памяти (ГБ)")
+    pcie_version = models.CharField(max_length=20, verbose_name="Интерфейс PCIe")
+    form_factor = models.CharField(max_length=50, verbose_name="Форм-фактор")
+    tdp = models.IntegerField(verbose_name="TDP (Вт)")
+    power_connectors = models.CharField(max_length=100, verbose_name="Разъемы питания")
+    length_mm = models.IntegerField(verbose_name="Длина (мм)")
+    outputs = models.CharField(max_length=100, verbose_name="Видеовыходы")
+    boost_clock_mhz = models.IntegerField(verbose_name="Частота (МГц)")
+
+# 4. Сущность Memory (Оперативная память)
+class Memory(models.Model):
+    component = models.OneToOneField(Component, on_delete=models.CASCADE, primary_key=True)
+    type = models.CharField(max_length=20, verbose_name="Тип (DDR)")
+    capacity_gb = models.IntegerField(verbose_name="Объем (ГБ)")
+    speed_mhz = models.IntegerField(verbose_name="Частота (МГц)")
+    timings = models.CharField(max_length=50, verbose_name="Тайминги")
+    voltage = models.FloatField(verbose_name="Напряжение (В)")
+
+# 5. Сущность Power_Supply (Блок питания)
+class PowerSupply(models.Model):
+    component = models.OneToOneField(Component, on_delete=models.CASCADE, primary_key=True)
+    wattage = models.IntegerField(verbose_name="Мощность (Вт)")
+    efficiency_rating = models.CharField(max_length=50, verbose_name="Сертификат")
+    connectors_sata = models.IntegerField(verbose_name="Разъемы SATA")
+    # Добавьте остальные разъемы по вашей схеме
+
+# 6. Сущность Configuration (Конфигурация ПК)
+class Configuration(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='configurations')
+    name = models.CharField(max_length=255, verbose_name="Название сборки")
+    is_public = models.BooleanField(default=False, verbose_name="Опубликовано (в каталоге)")
+    total_power_calc = models.IntegerField(default=0, verbose_name="Расчетная мощность")
+
+    def __str__(self):
+        return self.name
+
+# 7. Сущность Config_Item (Промежуточная таблица для связи сборки с комплектующими)
+class ConfigItem(models.Model):
+    configuration = models.ForeignKey(Configuration, on_delete=models.CASCADE, related_name='items')
+    component = models.ForeignKey(Component, on_delete=models.CASCADE)
+
+    class Meta:
+        unique_together = ('configuration', 'component')
