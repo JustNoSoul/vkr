@@ -1,5 +1,5 @@
 # Используем официальный образ Python
-FROM python:3.11-slim
+FROM cr.yandex/mirror/python:3.11-slim
 
 # Устанавливаем переменные окружения, чтобы Python не создавал файлы .pyc и выводил логи сразу
 ENV PYTHONDONTWRITEBYTECODE 1

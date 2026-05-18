@@ -10,10 +10,15 @@ services:
 
   app:
     build: ./backend
+    command: python manage.py runserver 0.0.0.0:8000
     env_file:
-      - .env  # Передаем переменные в Django
+      - .env
+    volumes:
+      - ./backend:/app
     ports:
       - "8000:8000"
+    environment:
+      - DEBUG=1
     depends_on:
       - db
 

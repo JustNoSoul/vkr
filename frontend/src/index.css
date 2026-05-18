@@ -1,0 +1,36 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #12121e;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+/* Для Chrome, Safari и Edge */
+::-webkit-scrollbar {
+  width: 8px; /* Ширина скроллбара */
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #111622; /* Цвет дорожки (в цвет твоего фона) */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a5568; /* Цвет самого ползунка */
+  border-radius: 4px; /* Закругление */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #718096; /* Цвет ползунка при наведении */
+}
+
+/* Для Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4a5568 #111622;
+}
