@@ -2,7 +2,9 @@ from rest_framework import viewsets
 from .models import *
 from .serializers import *
 from .permissions import IsOwnerOrReadOnly
+from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
+from .serializers import ConfigurationSerializer, ConfigurationSaveSerializer
 
 class CPUViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = CPU.objects.all()
@@ -40,8 +42,24 @@ class ConfigItemViewSet(viewsets.ModelViewSet):
     serializer_class = ConfigItemSerializer
 class ConfigurationViewSet(viewsets.ModelViewSet):
     queryset = Configuration.objects.all()
-    serializer_class = ConfigurationSerializer
-    permission_classes = [IsOwnerOrReadOnly]
+
+    # Динамически выбираем сериализатор в зависимости от действия (action)
+    def get_serializer_class(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return ConfigurationSaveSerializer
+        return ConfigurationSerializer
+
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        qs = Configuration.objects.all()
+        if self.action in ('list', 'retrieve', 'update', 'partial_update', 'destroy'):
+            if self.request.user.is_authenticated:
+                return qs.filter(user=self.request.user)
+        return qs
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

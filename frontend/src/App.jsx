@@ -1,25 +1,50 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from 'react-router-dom';
-import { LayoutGrid, Settings, X, User } from 'lucide-react';
+import { LayoutGrid, Settings, X, LogOut } from 'lucide-react';
 import Home from './pages/Home';
 import Catalog from './pages/Catalog';
-import Configurator from './pages/Configurator'; // ИМПОРТИРУЕМ НАШ КУРТЫЙ КОНФИГУРАТОР
-
-// Временные заглушки
-const Profile = () => <div style={{color: '#f5f5f7', padding: '40px', textAlign: 'center'}}>Личный кабинет в разработке</div>;
-
+import Configurator from './pages/Configurator';
+import Profile from './pages/Profile'; 
+import { useContext } from 'react';
+import { BuildContext } from './BuildContext.jsx';
 function AppContent() {
+  const { clearBuild } = useContext(BuildContext);
   const navigate = useNavigate();
   const [showModeModal, setShowModeModal] = useState(false);
-
+  const startNewBuild = () => {
+    clearBuild();
+    sessionStorage.removeItem('pc_edit_id');
+    sessionStorage.removeItem('pc_edit_name');
+    localStorage.removeItem('pc_build');
+    localStorage.removeItem('pc_build_rgb');
+    localStorage.removeItem('pc_build_fans');
+    setShowModeModal(false);
+  };
   // --- ГЛОБАЛЬНЫЕ СТЕЙТЫ АВТОРИЗАЦИИ ---
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState('login'); // 'login' или 'register'
-  const [authFormData, setAuthFormData] = useState({ username: '', email: '', password: '' });
+  const [authFormData, setAuthFormData] = useState({ username: '', password: '' });
   const [authError, setAuthError] = useState('');
+  
+  // Переводим проверку токена в состояние, чтобы React реагировал на его изменения
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('accessToken'));
 
-  // Проверяем авторизацию по наличию токена в localStorage
-  const isAuthenticated = !!localStorage.getItem('accessToken');
+  // СИНХРОНИЗАЦИЯ СОСТОЯНИЯ АВТОРИЗАЦИИ МЕЖДУ КОМПОНЕНТАМИ
+  useEffect(() => {
+    const handleAuthUpdate = () => {
+      setIsAuthenticated(!!localStorage.getItem('accessToken'));
+    };
+
+    // Слушаем кастомное событие успешного входа
+    window.addEventListener('auth_success', handleAuthUpdate);
+    // Слушаем системное событие изменения localStorage (на случай разлогина из-за 401 ошибки)
+    window.addEventListener('storage', handleAuthUpdate);
+
+    return () => {
+      window.removeEventListener('auth_success', handleAuthUpdate);
+      window.removeEventListener('storage', handleAuthUpdate);
+    };
+  }, []);
 
   const handleScrollToBuilds = (e) => {
     if (window.location.pathname === '/') {
@@ -35,15 +60,22 @@ function AppContent() {
   const handleProfileClick = (e) => {
     e.preventDefault();
     if (!isAuthenticated) {
-      // Если не авторизован — сбрасываем форму и открываем модалку входа
-      setAuthFormData({ username: '', email: '', password: '' });
+      setAuthFormData({ username: '', password: '' });
       setAuthError('');
       setAuthMode('login');
       setIsAuthModalOpen(true);
     } else {
-      // Если авторизован — пускаем на страницу личного кабинета
       navigate('/profile');
     }
+  };
+
+  // ФУНКЦИЯ ВЫХОДА ИЗ СИСТЕМЫ
+  const handleLogout = () => {
+    // Исправлено: Очищаем токены, ключ 'user' больше удалять не нужно (его нет)
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    setIsAuthenticated(false); // Сразу обновляем интерфейс шапки
+    navigate('/'); 
   };
 
   // ОТПРАВКА ДАННЫХ ВХОДА / РЕГИСТРАЦИИ НА БЭКЕНД
@@ -51,10 +83,12 @@ function AppContent() {
     e.preventDefault();
     setAuthError('');
 
-    const endpoint = authMode === 'login' ? '/api/auth/login/' : '/api/auth/register/';
-    const payload = authMode === 'login' 
-      ? { username: authFormData.username, password: authFormData.password }
-      : { username: authFormData.username, email: authFormData.email, password: authFormData.password };
+    const endpoint = authMode === 'login' ? '/api/accounts/token/' : '/api/accounts/register/';
+    
+    const payload = { 
+      username: authFormData.username, 
+      password: authFormData.password 
+    };
 
     fetch(endpoint, {
       method: 'POST',
@@ -63,18 +97,29 @@ function AppContent() {
     })
     .then(async (res) => {
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Что-то пошло не так');
+      if (!res.ok) {
+        const errorMsg = data.detail || Object.values(data).flat().join(', ') || 'Что-то пошло не так';
+        throw new Error(errorMsg);
+      }
       return data;
     })
     .then((data) => {
-      // Сохраняем полученный access-токен
-      localStorage.setItem('accessToken', data.access || data.token);
-      setIsAuthModalOpen(false);
-      
-      // Генерируем глобальное событие, чтобы страница конфигуратора узнала о входе
-      window.dispatchEvent(new Event('auth_success'));
-      
-      alert('Вы успешно вошли в систему!');
+      if (authMode === 'register') {
+        setAuthMode('login');
+        setAuthFormData({ username: '', password: '' });
+      } else {
+        localStorage.setItem('accessToken', data.access);
+        if (data.refresh) {
+          localStorage.setItem('refreshToken', data.refresh);
+        }
+        
+        // ИСПРАВЛЕНО: Строчка localStorage.setItem('user', ...) удалена!
+        // Теперь данные пользователя не хранятся мертвым грузом на клиенте.
+        
+        setIsAuthenticated(true); // Обновляем стейт авторизации
+        setIsAuthModalOpen(false);
+        window.dispatchEvent(new Event('auth_success'));
+      }
     })
     .catch((err) => {
       setAuthError(err.message || 'Ошибка аутентификации');
@@ -85,9 +130,8 @@ function AppContent() {
     setAuthFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  // Функция принудительного вызова модалки (передадим её в Configurator через пропсы)
   const triggerAuthModal = () => {
-    setAuthFormData({ username: '', email: '', password: '' });
+    setAuthFormData({ username: '', password: '' });
     setAuthError('');
     setAuthMode('login');
     setIsAuthModalOpen(true);
@@ -96,13 +140,22 @@ function AppContent() {
   return (
     <div style={{ backgroundColor: '#12121e', minHeight: '100vh' }}>
       
-      {/* Глобальные стили для красивого темного скроллбара */}
       <style>{`
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #12121e; }
         ::-webkit-scrollbar-thumb { background: #3a3a52; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #4f4f6f; }
         * { scrollbar-width: thin; scrollbar-color: #3a3a52 #12121e; }
+
+        .custom-nav-link { transition: color 0.2s ease; }
+        .custom-nav-link:hover { color: #ffffff !important; }
+
+        .logout-btn { transition: color 0.2s ease; }
+        .logout-btn:hover { color: #ef4444 !important; }
+
+        .nav-build-btn { transition: opacity 0.2s ease, transform 0.1s ease; }
+        .nav-build-btn:hover { opacity: 0.9; }
+        .nav-build-btn:active { transform: scale(0.98); }
       `}</style>
 
       {/* --- ШАПКА САЙТА --- */}
@@ -111,16 +164,22 @@ function AppContent() {
           <Link to="/" style={{ textDecoration: 'none', color: '#f5f5f7', letterSpacing: '0.5px' }}>КОНФИГУРАТОР ПК</Link>
         </div>
         <nav style={{ display: 'flex', gap: '30px', alignItems: 'center' }}>
-          <Link to="/" style={navLinkStyle}>Главная</Link>
-          <Link to="/#ready-builds" onClick={handleScrollToBuilds} style={navLinkStyle}>Готовые сборки</Link>
-          <Link to="/catalog" style={navLinkStyle}>Комплектующие</Link>
+          <Link to="/" className="custom-nav-link" style={navLinkStyle}>Главная</Link>
+          <Link to="/#ready-builds" onClick={handleScrollToBuilds} className="custom-nav-link" style={navLinkStyle}>Готовые сборки</Link>
+          <Link to="/catalog" className="custom-nav-link" style={navLinkStyle}>Комплектующие</Link>
           
-          {/* Умная ссылка Личного кабинета */}
-          <a href="/profile" onClick={handleProfileClick} style={navLinkStyle}>
+          <a href="/profile" onClick={handleProfileClick} className="custom-nav-link" style={navLinkStyle}>
             {isAuthenticated ? 'Личный кабинет' : 'Войти'}
           </a>
 
-          <button onClick={() => setShowModeModal(true)} style={navButtonStyle}>
+          {isAuthenticated && (
+            <button onClick={handleLogout} className="logout-btn" style={logoutButtonStyle}>
+              <LogOut size={16} />
+              Выйти
+            </button>
+          )}
+
+          <button onClick={() => setShowModeModal(true)} className="nav-build-btn" style={navButtonStyle}>
             Собрать ПК
           </button>
         </nav>
@@ -132,8 +191,6 @@ function AppContent() {
           <Route path="/" element={<Home openModeModal={() => setShowModeModal(true)} />} />
           <Route path="/catalog" element={<Catalog />} />
           <Route path="/profile" element={<Profile />} />
-          
-          {/* СВЯЗЫВАЕМ КОНФИГУРАТОР И ПЕРЕДАЕМ ФУНКЦИЮ ОТКРЫТИЯ МОДАЛКИ ИЗ PROPS */}
           <Route path="/configurator" element={<Configurator openAuthModal={triggerAuthModal} />} />
         </Routes>
       </main>
@@ -149,21 +206,13 @@ function AppContent() {
             <p style={modalDescStyle}>Определите, как вам удобнее подбирать комплектующие</p>
 
             <div style={modalGridStyle}>
-              {/* Пошаговый */}
-              <div style={modeCardStyle} onClick={() => { setShowModeModal(false); navigate('/configurator?mode=step'); }}>
+              <div style={modeCardStyle} onClick={() => {startNewBuild(); navigate('/configurator?mode=step'); }}>
                 <Settings size={40} color="#0071e3" style={modeIconStyle} />
                 <h3 style={modeCardTitleStyle}>Пошаговый мастер</h3>
                 <p style={modeCardDescStyle}>Система будет вести вас по шагам и автоматически скрывать неподходящие детали.</p>
               </div>
 
-              {/* Свободный */}
-              <div 
-                style={modeCardStyle} 
-                onClick={() => { 
-                  setShowModeModal(false); 
-                  navigate('/configurator?mode=free');
-                }}
-              >
+              <div style={modeCardStyle} onClick={() => {startNewBuild(); navigate('/configurator?mode=free'); }}>
                 <LayoutGrid size={40} color="#34c759" style={modeIconStyle} />
                 <h3 style={modeCardTitleStyle}>Свободный режим</h3>
                 <p style={modeCardDescStyle}>Выбирайте любые элементы в удобном порядке. Ошибки подсветятся автоматически.</p>
@@ -201,18 +250,6 @@ function AppContent() {
                 style={authInputStyle}
               />
               
-              {authMode === 'register' && (
-                <input
-                  type="email"
-                  name="email"
-                  placeholder="Электронная почта"
-                  required
-                  value={authFormData.email}
-                  onChange={handleAuthInputChange}
-                  style={authInputStyle}
-                />
-              )}
-
               <input
                 type="password"
                 name="password"
@@ -252,7 +289,6 @@ function AppContent() {
   );
 }
 
-// Обертка для корректной работы useNavigate внутри Router
 function App() {
   return (
     <Router>
@@ -261,7 +297,7 @@ function App() {
   );
 }
 
-// Стили для App.jsx
+// Стили
 const headerStyle = {
   backgroundColor: '#1c1c2e', padding: '20px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   borderBottom: '1px solid #2c2c44', position: 'sticky', top: 0, zIndex: 100
@@ -271,15 +307,14 @@ const navButtonStyle = {
   backgroundColor: '#0071e3', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: '20px',
   fontWeight: '600', fontSize: '14px', cursor: 'pointer'
 };
-const modalOverlayStyle = { 
-  position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', 
-  backgroundColor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)', 
-  display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 
+
+const logoutButtonStyle = {
+  backgroundColor: 'transparent', border: 'none', color: '#b0b0bc', fontSize: '15px', cursor: 'pointer',
+  display: 'flex', alignItems: 'center', gap: '6px', padding: 0, fontFamily: 'inherit'
 };
-const modalContentStyle = { 
-  backgroundColor: '#1c1c2e', padding: '45px', borderRadius: '24px', width: '100%', 
-  maxWidth: '650px', boxSizing: 'border-box', position: 'relative', border: '1px solid #3a3a52', margin: '20px' 
-};
+
+const modalOverlayStyle = { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 };
+const modalContentStyle = { backgroundColor: '#1c1c2e', padding: '45px', borderRadius: '24px', width: '100%', maxWidth: '650px', boxSizing: 'border-box', position: 'relative', border: '1px solid #3a3a52', margin: '20px' };
 const modalCloseButtonStyle = { position: 'absolute', top: '25px', right: '25px', backgroundColor: 'transparent', color: '#a1a1aa', border: 'none', cursor: 'pointer' };
 const modalTitleStyle = { fontSize: '30px', fontWeight: '700', textAlign: 'center', marginBottom: '12px', color: '#ffffff' };
 const modalDescStyle = { color: '#e4e4e7', textAlign: 'center', marginBottom: '35px', fontSize: '15px' };
@@ -289,7 +324,6 @@ const modeIconStyle = { marginBottom: '15px', marginLeft: 'auto', marginRight: '
 const modeCardTitleStyle = { fontSize: '20px', fontWeight: '700', marginBottom: '12px', color: '#ffffff' };
 const modeCardDescStyle = { color: '#d4d4d8', fontSize: '13px', lineHeight: '1.5' };
 
-// Стили модального окна авторизации
 const authModalOverlayStyle = { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 3000 };
 const authModalContentStyle = { backgroundColor: '#1c1c2e', padding: '35px', borderRadius: '24px', width: '400px', maxWidth: '90%', position: 'relative', border: '1px solid #3a3a52', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' };
 const authModalCloseStyle = { position: 'absolute', top: '20px', right: '20px', backgroundColor: 'transparent', color: '#a1a1aa', border: 'none', cursor: 'pointer', padding: '4px' };

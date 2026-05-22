@@ -168,14 +168,23 @@ function Catalog() {
     const nodeId = mapping[activeCategory] || activeCategory;
     const powerValue = product.tdp || product.wattage || null;
 
-    navigate('/configurator', {
+    // Достаем originMode и originId из URL каталога
+    const urlParams = new URLSearchParams(window.location.search);
+    const originId = urlParams.get('originId') || '';
+    const originMode = urlParams.get('originMode') || (originId ? 'edit' : 'free');
+
+    const backUrl = originId
+      ? `/configurator?mode=${originMode}&id=${originId}`
+      : `/configurator?mode=${originMode}`;
+
+    navigate(backUrl, {
       state: {
         chosenComponent: {
-          ...product, // 1. Копируем абсолютно ВСЕ родные поля объекта из базы (включая ватты и пины БП)
-          name: formatFullName(product), // 2. Перезаписываем красивым форматированным именем
+          ...product,
+          name: formatFullName(product),
           socket: product.socket || null,
           supported_sockets: product.supported_sockets || null,
-          tdp: powerValue, // 3. Оставляем для обратной совместимости с процессорами/кулерами
+          tdp: powerValue,
           capacity: product.capacity || null,
           ram_slots: product.ram_slots || null 
         },
