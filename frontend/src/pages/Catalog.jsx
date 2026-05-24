@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   Cpu, Layers, Gamepad2, HardDrive, Plug, Wind, Box, Search, Info, X, Loader2 
 } from 'lucide-react';
+import { getCatalogMiniSpecs } from '../utils/componentSpecs.js';
 
 function Catalog() {
   const [searchParams] = useSearchParams();
@@ -33,8 +34,6 @@ function Catalog() {
   // Хранилище для динамических фильтров
   const [textFilters, setTextFilters] = useState({});
   const [rangeFilters, setRangeFilters] = useState({});
-
-  const mainSpecsToShow = ['socket', 'chipset', 'cores', 'capacity', 'wattage', 'tdp', 'type'];
 
   // Синхронизируем категорию при изменении параметров URL
   useEffect(() => {
@@ -223,15 +222,18 @@ function Catalog() {
   });
 
   const renderMiniSpecs = (item) => {
-    return Object.entries(item)
-      .filter(([key]) => mainSpecsToShow.includes(key) && item[key] !== null && item[key] !== undefined)
-      .slice(0, 3)
-      .map(([key, value]) => (
-        <div key={key} style={specRowStyle}>
-          <span style={specKeyStyle}>{translateField(key)}:</span>
-          <span style={specValueStyle}>{formatValue(value)}</span>
-        </div>
-      ));
+    const specs = getCatalogMiniSpecs(activeCategory, item);
+    if (specs.length === 0) {
+      return (
+        <div style={{ fontSize: '12px', color: '#71717a' }}>Характеристики не указаны</div>
+      );
+    }
+    return specs.map(({ label, value }) => (
+      <div key={label} style={specRowStyle}>
+        <span style={specKeyStyle}>{label}:</span>
+        <span style={specValueStyle}>{value}</span>
+      </div>
+    ));
   };
 
   return (
@@ -466,7 +468,7 @@ const scrollbarCustomStyles = `
   }
 `;
 
-const catalogContainerStyle = { display: 'flex', backgroundColor: '#12121e', color: '#ffffff', minHeight: '100vh', padding: '40px 20px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', gap: '30px', width: '100%', boxSizing: 'border-box' };
+const catalogContainerStyle = { display: 'flex', backgroundColor: '#12121e', color: '#ffffff', minHeight: '100vh', padding: '40px 16px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', gap: '30px', width: '100%', maxWidth: '100vw', overflowX: 'hidden', boxSizing: 'border-box' };
 const sidebarStyle = { width: '310px', backgroundColor: '#1c1c2e', borderRadius: '16px', padding: '20px', border: '1px solid #2c2c44', height: 'calc(100vh - 80px)', position: 'sticky', top: '40px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '25px', boxSizing: 'border-box' };
 const sidebarTitleStyle = { fontSize: '15px', fontWeight: '700', margin: 0, letterSpacing: '0.5px', textTransform: 'uppercase', color: '#0071e3' };
 const resetFiltersButtonStyle = { backgroundColor: 'transparent', border: 'none', color: '#ef4444', fontSize: '12px', fontWeight: '600', cursor: 'pointer', outline: 'none' };

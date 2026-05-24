@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   User, HardDrive, Trash2, Edit3, Key, 
-  Cpu, Loader2, AlertTriangle, X 
+  Cpu, Loader2, AlertTriangle, X, Pencil, FileDown, Check
 } from 'lucide-react';
+import { exportBuildToPdf } from '../utils/exportBuildPdf.js';
+import { calculatePowerFromConfiguration, itemsToBuildSlots } from '../utils/buildPower.js';
 
 const declOfNum = (number, titles) => {
   const cases = [2, 0, 1, 1, 1, 2];
@@ -17,10 +19,16 @@ const declOfNum = (number, titles) => {
 function Profile() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('Загрузка...');
+  const [isAdmin, setIsAdmin] = useState(localStorage.getItem('userRole') === 'admin');
   const [builds, setBuilds] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [isDeletingId, setIsDeletingId] = useState(null);
+  const [renamingBuildId, setRenamingBuildId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [isRenamingSaving, setIsRenamingSaving] = useState(false);
+  const [renameError, setRenameError] = useState('');
+  const [exportingBuildId, setExportingBuildId] = useState(null);
 
   // --- СОСТОЯНИЯ ДЛЯ МОДАЛЬНОГО ОКНА СМЕНЫ ПАРОЛЯ ---
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
@@ -59,7 +67,11 @@ function Profile() {
 
         if (response.ok) {
           const data = await response.json();
-          setUsername(data.username); // Устанавливаем имя из базы данных
+          setUsername(data.username);
+          const admin =
+            data.role === 'admin' || data.is_superuser || data.is_staff;
+          setIsAdmin(admin);
+          if (admin) localStorage.setItem('userRole', 'admin');
         } else {
           setUsername('Пользователь');
         }
@@ -183,20 +195,106 @@ function Profile() {
   };
 
   // Найдите обработчик клика на кнопку редактирования в Profile.jsx и приведите его к такому виду:
-const handleEditBuild = (build) => {
-  sessionStorage.setItem('pc_edit_id', String(build.id));
-  sessionStorage.setItem('pc_edit_name', build.name || '');
-  navigate(`/configurator?mode=edit&id=${build.id}`, {
-    state: {
-      buildName: build.name,
-      loadSavedComponents: build.items,
-      has_rgb: build.has_rgb,
-      cooler_count: build.cooler_count
+  const handleEditBuild = (build) => {
+    sessionStorage.setItem('pc_edit_id', String(build.id));
+    sessionStorage.setItem('pc_edit_name', build.name || '');
+    sessionStorage.setItem('pc_edit_force_reload', '1');
+    navigate(`/configurator?mode=edit&id=${build.id}`);
+  };
+
+  const startRenameBuild = (build) => {
+    setRenamingBuildId(build.id);
+    setRenameValue(build.name || '');
+    setRenameError('');
+  };
+
+  const cancelRenameBuild = () => {
+    setRenamingBuildId(null);
+    setRenameValue('');
+    setRenameError('');
+  };
+
+  const handleRenameBuild = async (build) => {
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      setRenameError('Введите название сборки.');
+      return;
     }
-  });
-};
+
+    const token = localStorage.getItem('accessToken');
+    setIsRenamingSaving(true);
+    setRenameError('');
+
+    const componentIds = (build.items || [])
+      .map(item => item.component ?? item.component_details?.id)
+      .filter(id => id != null);
+
+    try {
+      const response = await fetch(`/api/configurations/${build.id}/`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: trimmed,
+          total_power: build.total_power || 0,
+          component_ids: componentIds,
+          has_rgb: Boolean(build.has_rgb),
+          cooler_count: build.cooler_count || 0
+        })
+      });
+
+      if (response.status === 401) {
+        handleLogout();
+        return;
+      }
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || 'Не удалось переименовать сборку.');
+      }
+
+      setBuilds(prev => prev.map(b => b.id === build.id ? { ...b, name: trimmed } : b));
+      cancelRenameBuild();
+    } catch (err) {
+      setRenameError(err.message || 'Ошибка при сохранении названия.');
+    } finally {
+      setIsRenamingSaving(false);
+    }
+  };
+
+  const buildPdfPayload = (buildItem) => {
+    const slots = itemsToBuildSlots(buildItem.items);
+    return {
+      name: buildItem.name,
+      total_power: buildItem.total_power || calculatePowerFromConfiguration(buildItem),
+      has_rgb: buildItem.has_rgb,
+      cooler_count: buildItem.cooler_count,
+      items: buildItem.items || [],
+      motherboard: slots.motherboard,
+      gpu: slots.gpu,
+      cooling: slots.cooling,
+    };
+  };
+
+  const handleExportPdf = async (buildItem) => {
+    const token = localStorage.getItem('accessToken');
+    setExportingBuildId(buildItem.id);
+    try {
+      const res = await fetch(`/api/configurations/${buildItem.id}/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = res.ok ? await res.json() : buildItem;
+      await exportBuildToPdf(buildPdfPayload(data));
+    } catch (err) {
+      alert(err.message || 'Не удалось сформировать PDF.');
+    } finally {
+      setExportingBuildId(null);
+    }
+  };
   // Стили страницы
-  const pageContainerStyle = { maxWidth: '1100px', margin: '40px auto', padding: '0 20px', color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' };
+  const pageContainerStyle = { maxWidth: '1100px', margin: '40px auto', padding: '0 16px', color: '#ffffff', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', width: '100%', boxSizing: 'border-box', minHeight: 'calc(100vh - 80px)', backgroundColor: '#12121e' };
   const headerCardStyle = { backgroundColor: '#1c1c2e', border: '1px solid #2c2c44', borderRadius: '16px', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' };
   const userInfoStyle = { display: 'flex', alignItems: 'center', gap: '16px' };
   const avatarStyle = { width: '56px', height: '56px', borderRadius: '50%', backgroundColor: '#2c2c44', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0071e3' };
@@ -205,20 +303,31 @@ const handleEditBuild = (build) => {
   const subtitleStyle = { color: '#a1a1aa', fontSize: '14px', marginBottom: '24px' };
   
   const gridStyle = { display: 'grid', gridTemplateColumns: '1fr', gap: '16px' };
-  const buildCardStyle = { backgroundColor: '#1c1c2e', border: '1px solid #2c2c44', borderRadius: '14px', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', transition: 'border-color 0.2s' };
+  const buildCardStyle = { backgroundColor: '#1c1c2e', border: '1px solid #2c2c44', borderRadius: '14px', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', transition: 'border-color 0.2s', flexWrap: 'wrap' };
   const buildInfoStyle = { display: 'flex', flexDirection: 'column', gap: '6px' };
   const buildNameStyle = { fontSize: '16px', fontWeight: '700', color: '#ffffff', margin: 0 };
   const buildMetaStyle = { display: 'flex', gap: '16px', color: '#71717a', fontSize: '13px' };
   
-  const actionsContainerStyle = { display: 'flex', gap: '10px' };
+  const actionsContainerStyle = { display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' };
+  const btnTextStyle = {
+    display: 'flex', alignItems: 'center', gap: '6px',
+    padding: '8px 12px', borderRadius: '10px', border: '1px solid #2c2c44',
+    backgroundColor: '#1c1c2e', color: '#e4e4e7', fontSize: '12px', fontWeight: '600',
+    cursor: 'pointer', outline: 'none'
+  };
+  const modalInputStyle = { backgroundColor: '#12121e', border: '1px solid #2c2c44', borderRadius: '8px', color: '#ffffff', padding: '12px 14px', fontSize: '14px', width: '100%', outline: 'none', boxSizing: 'border-box', marginTop: '6px' };
+  const renameInputStyle = {
+    ...modalInputStyle,
+    marginTop: '8px',
+    fontSize: '15px',
+    fontWeight: '600'
+  };
   const btnIconStyle = { padding: '10px', borderRadius: '10px', border: '1px solid #2c2c44', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s', outline: 'none' };
   const btnPasswordStyle = { display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#2c2c44', color: '#ffffff', border: '1px solid #3a3a52', padding: '10px 18px', borderRadius: '10px', cursor: 'pointer', fontWeight: '600', fontSize: '14px', transition: 'background-color 0.2s' };
 
-  // Стили для модального окна смены пароля
   const modalOverlayStyle = { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 4000 };
   const modalContentStyle = { backgroundColor: '#1c1c2e', padding: '35px', borderRadius: '24px', width: '400px', maxWidth: '90%', position: 'relative', border: '1px solid #3a3a52', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' };
   const modalCloseStyle = { position: 'absolute', top: '20px', right: '20px', backgroundColor: 'transparent', color: '#a1a1aa', border: 'none', cursor: 'pointer', padding: '4px' };
-  const modalInputStyle = { backgroundColor: '#12121e', border: '1px solid #2c2c44', borderRadius: '8px', color: '#ffffff', padding: '12px 14px', fontSize: '14px', width: '100%', outline: 'none', boxSizing: 'border-box', marginTop: '6px' };
   const modalSubmitButtonStyle = { backgroundColor: '#0071e3', color: '#ffffff', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', marginTop: '10px', transition: 'background-color 0.2s' };
 
   return (
@@ -264,11 +373,13 @@ const handleEditBuild = (build) => {
           <HardDrive size={22} color="#0071e3" />
           Ваши конфигурации ПК
           <span style={{ backgroundColor: '#2c2c44', color: '#a1a1aa', fontSize: '12px', padding: '2px 8px', borderRadius: '20px', marginLeft: '6px', fontWeight: '600' }}>
-            {builds.length} / 5
+            {isAdmin ? builds.length : `${builds.length} / 5`}
           </span>
         </div>
-        
-        {builds.length >= 5 ? (
+
+        {isAdmin ? (
+          <p style={subtitleStyle}>Администратор: лимит в 5 сборок не применяется.</p>
+        ) : builds.length >= 5 ? (
           <p style={{ ...subtitleStyle, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <AlertTriangle size={14} /> Достигнут максимальный лимит. Чтобы создать новую сборку, удалите одну из текущих.
           </p>
@@ -320,27 +431,85 @@ const handleEditBuild = (build) => {
                   onMouseOver={(e) => e.currentTarget.style.borderColor = '#3a3a52'}
                   onMouseOut={(e) => e.currentTarget.style.borderColor = '#2c2c44'}
                 >
-                  <div style={buildInfoStyle}>
-                    <h3 style={buildNameStyle}>{buildItem.name}</h3>
+                  <div style={{ ...buildInfoStyle, flex: '1 1 240px', minWidth: '200px' }}>
+                    {renamingBuildId === buildItem.id ? (
+                      <div>
+                        <input
+                          type="text"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          disabled={isRenamingSaving}
+                          style={renameInputStyle}
+                          autoFocus
+                          maxLength={255}
+                        />
+                        {renameError && (
+                          <p style={{ color: '#ef4444', fontSize: '12px', margin: '6px 0 0' }}>{renameError}</p>
+                        )}
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                          <button
+                            type="button"
+                            disabled={isRenamingSaving}
+                            onClick={() => handleRenameBuild(buildItem)}
+                            style={{ ...btnTextStyle, backgroundColor: '#0071e3', borderColor: '#0071e3', color: '#fff' }}
+                          >
+                            {isRenamingSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                            Сохранить
+                          </button>
+                          <button type="button" disabled={isRenamingSaving} onClick={cancelRenameBuild} style={btnTextStyle}>
+                            Отмена
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <h3 style={buildNameStyle}>{buildItem.name}</h3>
+                    )}
                     <div style={buildMetaStyle}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Cpu size={14} /> {componentsCount} {word}
                       </span>
                       <span>•</span>
-                      <span>Потребление: {buildItem.total_power || 0} Вт</span>
+                      <span>Реком. БП: ~{buildItem.total_power || calculatePowerFromConfiguration(buildItem)} Вт</span>
                     </div>
                   </div>
 
                   <div style={actionsContainerStyle}>
-                    <button
-                      onClick={() => handleEditBuild(buildItem)}
-                      title="Редактировать конфигурацию"
-                      style={{ ...btnIconStyle, backgroundColor: '#1c1c2e', color: '#0071e3' }}
-                      onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#0071e3'; e.currentTarget.style.color = '#ffffff'; }}
-                      onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#1c1c2e'; e.currentTarget.style.color = '#0071e3'; }}
-                    >
-                      <Edit3 size={16} />
-                    </button>
+                    {renamingBuildId !== buildItem.id && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => startRenameBuild(buildItem)}
+                          title="Переименовать"
+                          style={btnTextStyle}
+                        >
+                          <Pencil size={14} color="#a1a1aa" />
+                          Имя
+                        </button>
+                        <button
+                          type="button"
+                          disabled={exportingBuildId === buildItem.id}
+                          onClick={() => handleExportPdf(buildItem)}
+                          title="Экспорт в PDF"
+                          style={{ ...btnTextStyle, color: '#34c759', borderColor: 'rgba(52,199,89,0.35)' }}
+                        >
+                          {exportingBuildId === buildItem.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <FileDown size={14} />
+                          )}
+                          PDF
+                        </button>
+                        <button
+                          onClick={() => handleEditBuild(buildItem)}
+                          title="Редактировать конфигурацию"
+                          style={{ ...btnIconStyle, backgroundColor: '#1c1c2e', color: '#0071e3' }}
+                          onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#0071e3'; e.currentTarget.style.color = '#ffffff'; }}
+                          onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#1c1c2e'; e.currentTarget.style.color = '#0071e3'; }}
+                        >
+                          <Edit3 size={16} />
+                        </button>
+                      </>
+                    )}
 
                     <button
                       disabled={isDeletingId === buildItem.id}

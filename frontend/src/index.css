@@ -4,11 +4,30 @@
   box-sizing: border-box;
 }
 
+html {
+  background-color: #12121e;
+  min-height: 100%;
+  width: 100%;
+  color-scheme: dark;
+}
+
+html, body {
+  overscroll-behavior-x: none;
+}
+
 body {
   background-color: #12121e;
   margin: 0;
   padding: 0;
   overflow-x: hidden;
+  min-height: 100vh;
+  width: 100%;
+}
+
+#root {
+  background-color: #12121e;
+  min-height: 100vh;
+  width: 100%;
 }
 /* Для Chrome, Safari и Edge */
 ::-webkit-scrollbar {

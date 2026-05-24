@@ -58,27 +58,34 @@ class ConfigItemSerializer(serializers.ModelSerializer):
     def get_component_details(self, obj):
         component = obj.component
         category = component.category
-        
+
+        base = {
+            'id': component.id,
+            'name': component.name,
+            'category': component.category,
+            'manufacturer': component.manufacturer,
+        }
+
         try:
             if category == 'cpus' and hasattr(component, 'cpu'):
-                return CPUSerializer(component.cpu).data
+                return {**base, **CPUSerializer(component.cpu).data}
             elif category == 'motherboards' and hasattr(component, 'motherboard'):
-                return MotherboardSerializer(component.motherboard).data
+                return {**base, **MotherboardSerializer(component.motherboard).data}
             elif category == 'videocards' and hasattr(component, 'videocard'):
-                return VideocardSerializer(component.videocard).data
+                return {**base, **VideocardSerializer(component.videocard).data}
             elif category == 'memory' and hasattr(component, 'memory'):
-                return MemorySerializer(component.memory).data
+                data = {**base, **MemorySerializer(component.memory).data}
+                return data
             elif category == 'coolers' and hasattr(component, 'cpu_cooler'):
-                return CPUCoolerSerializer(component.cpu_cooler).data
+                return {**base, **CPUCoolerSerializer(component.cpu_cooler).data}
             elif category == 'power-supplies' and hasattr(component, 'power_supply'):
-                return PowerSupplySerializer(component.power_supply).data
+                return {**base, **PowerSupplySerializer(component.power_supply).data}
             elif category == 'storages' and hasattr(component, 'storage'):
-                return StorageSerializer(component.storage).data
+                return {**base, **StorageSerializer(component.storage).data}
         except Exception as e:
             print(f"Ошибка сериализации дочерних полей для компонента {component.id}: {e}")
-            
-        # Если дочерняя модель не найдена, отдаем хотя бы базовые поля (id, name, category)
-        return ComponentSerializer(component).data
+
+        return base
 
 class ConfigurationSerializer(serializers.ModelSerializer):
     # Показываем список предметов внутри конфигурации

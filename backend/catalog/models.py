@@ -84,8 +84,10 @@ class Storage(Component):
 class Configuration(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
-    is_public = models.BooleanField(default=True)
+    is_public = models.BooleanField(default=False)
     total_power = models.IntegerField(default=0)
+    has_rgb = models.BooleanField(default=False)
+    cooler_count = models.IntegerField(default=0)
 
 class Config_Item(models.Model):
     configuration = models.ForeignKey(Configuration, on_delete=models.CASCADE, related_name='items')

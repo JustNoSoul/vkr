@@ -2,6 +2,9 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 
 class User(AbstractUser):
+    # Отключаем email на уровне модели Django
+    email = None 
+    
     ROLE_CHOICES = [
         ('user', 'Обычный пользователь'),
         ('admin', 'Администратор'),
@@ -13,6 +16,9 @@ class User(AbstractUser):
         default='user',
         verbose_name="Роль"
     )
+
+    # Указываем, что для авторизации нужен только username
+    REQUIRED_FIELDS = [] 
 
     class Meta:
         verbose_name = "Пользователь"

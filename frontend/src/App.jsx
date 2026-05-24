@@ -4,7 +4,9 @@ import { LayoutGrid, Settings, X, LogOut } from 'lucide-react';
 import Home from './pages/Home';
 import Catalog from './pages/Catalog';
 import Configurator from './pages/Configurator';
-import Profile from './pages/Profile'; 
+import Profile from './pages/Profile';
+import ReadyBuildDetail from './pages/ReadyBuildDetail.jsx';
+import AdminPanel from './pages/AdminPanel.jsx';
 import { useContext } from 'react';
 import { BuildContext } from './BuildContext.jsx';
 function AppContent() {
@@ -18,6 +20,8 @@ function AppContent() {
     localStorage.removeItem('pc_build');
     localStorage.removeItem('pc_build_rgb');
     localStorage.removeItem('pc_build_fans');
+    sessionStorage.removeItem('pc_build_edit_id');
+    sessionStorage.removeItem('pc_edit_force_reload');
     setShowModeModal(false);
   };
   // --- ГЛОБАЛЬНЫЕ СТЕЙТЫ АВТОРИЗАЦИИ ---
@@ -28,17 +32,40 @@ function AppContent() {
   
   // Переводим проверку токена в состояние, чтобы React реагировал на его изменения
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('accessToken'));
+  const [userRole, setUserRole] = useState(localStorage.getItem('userRole') || '');
 
   // СИНХРОНИЗАЦИЯ СОСТОЯНИЯ АВТОРИЗАЦИИ МЕЖДУ КОМПОНЕНТАМИ
   useEffect(() => {
+    const fetchRole = async () => {
+      const t = localStorage.getItem('accessToken');
+      if (!t) {
+        setUserRole('');
+        localStorage.removeItem('userRole');
+        return;
+      }
+      try {
+        const res = await fetch('/api/accounts/me/', { headers: { Authorization: `Bearer ${t}` } });
+        if (res.ok) {
+          const data = await res.json();
+          const effectiveRole =
+            data.role === 'admin' || data.is_superuser || data.is_staff ? 'admin' : (data.role || 'user');
+          setUserRole(effectiveRole);
+          localStorage.setItem('userRole', effectiveRole);
+        }
+      } catch {
+        setUserRole('');
+      }
+    };
+
     const handleAuthUpdate = () => {
       setIsAuthenticated(!!localStorage.getItem('accessToken'));
+      fetchRole();
     };
 
     // Слушаем кастомное событие успешного входа
     window.addEventListener('auth_success', handleAuthUpdate);
-    // Слушаем системное событие изменения localStorage (на случай разлогина из-за 401 ошибки)
     window.addEventListener('storage', handleAuthUpdate);
+    if (localStorage.getItem('accessToken')) fetchRole();
 
     return () => {
       window.removeEventListener('auth_success', handleAuthUpdate);
@@ -46,13 +73,16 @@ function AppContent() {
     };
   }, []);
 
-  const handleScrollToBuilds = (e) => {
+  const scrollToReadyBuilds = () => {
+    window.setTimeout(() => {
+      document.getElementById('ready-builds-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 150);
+  };
+
+  const handleReadyBuildsNav = (e) => {
     if (window.location.pathname === '/') {
       e.preventDefault();
-      const element = document.getElementById('ready-builds-section');
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth' });
-      }
+      scrollToReadyBuilds();
     }
   };
 
@@ -74,8 +104,10 @@ function AppContent() {
     // Исправлено: Очищаем токены, ключ 'user' больше удалять не нужно (его нет)
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
-    setIsAuthenticated(false); // Сразу обновляем интерфейс шапки
-    navigate('/'); 
+    localStorage.removeItem('userRole');
+    setIsAuthenticated(false);
+    setUserRole('');
+    navigate('/');
   };
 
   // ОТПРАВКА ДАННЫХ ВХОДА / РЕГИСТРАЦИИ НА БЭКЕНД
@@ -98,7 +130,7 @@ function AppContent() {
     .then(async (res) => {
       const data = await res.json();
       if (!res.ok) {
-        const errorMsg = data.detail || Object.values(data).flat().join(', ') || 'Что-то пошло не так';
+        const errorMsg = data.detail || (typeof data === 'object' ? Object.values(data).flat().join(', ') : '') || 'Не удалось выполнить вход. Проверьте данные.';
         throw new Error(errorMsg);
       }
       return data;
@@ -122,7 +154,7 @@ function AppContent() {
       }
     })
     .catch((err) => {
-      setAuthError(err.message || 'Ошибка аутентификации');
+      setAuthError(err.message || 'Ошибка авторизации');
     });
   };
 
@@ -138,7 +170,7 @@ function AppContent() {
   };
 
   return (
-    <div style={{ backgroundColor: '#12121e', minHeight: '100vh' }}>
+    <div style={{ backgroundColor: '#12121e', minHeight: '100vh', width: '100%', maxWidth: '100vw', overflowX: 'hidden' }}>
       
       <style>{`
         ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -165,12 +197,26 @@ function AppContent() {
         </div>
         <nav style={{ display: 'flex', gap: '30px', alignItems: 'center' }}>
           <Link to="/" className="custom-nav-link" style={navLinkStyle}>Главная</Link>
-          <Link to="/#ready-builds" onClick={handleScrollToBuilds} className="custom-nav-link" style={navLinkStyle}>Готовые сборки</Link>
+          <Link
+            to="/"
+            state={{ scrollToBuilds: true }}
+            onClick={handleReadyBuildsNav}
+            className="custom-nav-link"
+            style={navLinkStyle}
+          >
+            Готовые сборки
+          </Link>
           <Link to="/catalog" className="custom-nav-link" style={navLinkStyle}>Комплектующие</Link>
           
           <a href="/profile" onClick={handleProfileClick} className="custom-nav-link" style={navLinkStyle}>
             {isAuthenticated ? 'Личный кабинет' : 'Войти'}
           </a>
+
+          {userRole === 'admin' && (
+            <Link to="/admin" className="custom-nav-link" style={{ ...navLinkStyle, color: '#60a5fa' }}>
+              Админ-панель
+            </Link>
+          )}
 
           {isAuthenticated && (
             <button onClick={handleLogout} className="logout-btn" style={logoutButtonStyle}>
@@ -186,12 +232,14 @@ function AppContent() {
       </header>
 
       {/* --- КОНТЕНТ СТРАНИЦ --- */}
-      <main>
+      <main style={{ backgroundColor: '#12121e', width: '100%', overflowX: 'hidden' }}>
         <Routes>
           <Route path="/" element={<Home openModeModal={() => setShowModeModal(true)} />} />
           <Route path="/catalog" element={<Catalog />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/configurator" element={<Configurator openAuthModal={triggerAuthModal} />} />
+          <Route path="/ready-builds/:id" element={<ReadyBuildDetail openAuthModal={triggerAuthModal} />} />
+          <Route path="/admin" element={<AdminPanel />} />
         </Routes>
       </main>
 
@@ -299,7 +347,7 @@ function App() {
 
 // Стили
 const headerStyle = {
-  backgroundColor: '#1c1c2e', padding: '20px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  backgroundColor: '#1c1c2e', padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', boxSizing: 'border-box',
   borderBottom: '1px solid #2c2c44', position: 'sticky', top: 0, zIndex: 100
 };
 const navLinkStyle = { textDecoration: 'none', color: '#b0b0bc', fontSize: '15px', cursor: 'pointer' };

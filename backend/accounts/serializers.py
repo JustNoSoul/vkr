@@ -6,8 +6,7 @@ User = get_user_model()
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'role']
-        read_only_fields = ['role'] # Обычный пользователь не может сам себе выставить роль админа
+        fields = ['id', 'username', 'role']  # Убрали email отсюда
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -15,13 +14,12 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['username', 'email', 'password']
+        fields = ['username', 'password']  # Только логин и пароль
 
     def create(self, validated_data):
-        # Создаем пользователя с хэшированием пароля
-        user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data.get('email', ''),
-            password=validated_data['password']
-        )
+        # Создаем пустой объект пользователя
+        user = User(username=validated_data['username'])
+        # Хэшируем пароль вручную (чтобы он не хранился в открытом виде!)
+        user.set_password(validated_data['password'])
+        user.save()
         return user

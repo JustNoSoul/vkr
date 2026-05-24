@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useState, useEffect, useRef, useContext, useMemo } from 'react';
+import {
+  calculateBuildPower,
+  calculateBuildPowerRaw,
+  countPhysicalRamModules as countRamModules,
+} from '../utils/buildPower.js';
+import { fetchAppRequirements } from '../utils/appRequirements.js';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   Cpu, Layers, Gamepad2, Box, HardDrive, Plug, Wind, 
@@ -67,6 +73,99 @@ const STEPS = [
   }
 ];
 
+/** Раскладывает items конфигурации с API по слотам сборки */
+function mapConfigurationItemsToBuild(items) {
+  const restoredBuild = {
+    cpu: null,
+    motherboard: null,
+    gpu: null,
+    ram: [],
+    storage: [],
+    psu: null,
+    cooling: null,
+  };
+  const itemsForContext = [];
+
+  (items || []).forEach(item => {
+    const fullComponent = item.component_details;
+    if (!fullComponent) return;
+
+    itemsForContext.push({ id: fullComponent.id, name: fullComponent.name });
+
+    switch (fullComponent.category) {
+      case 'cpus':
+        restoredBuild.cpu = fullComponent;
+        break;
+      case 'motherboards':
+        restoredBuild.motherboard = fullComponent;
+        break;
+      case 'videocards':
+      case 'gpus':
+        restoredBuild.gpu = fullComponent;
+        break;
+      case 'coolers':
+      case 'coolings':
+        restoredBuild.cooling = fullComponent;
+        break;
+      case 'power-supplies':
+      case 'psus':
+        restoredBuild.psu = fullComponent;
+        break;
+      case 'memory':
+      case 'rams':
+        restoredBuild.ram.push({
+          ...fullComponent,
+          uniqueId: `${fullComponent.id}_${Date.now()}_${Math.random()}`
+        });
+        break;
+      case 'storages':
+        restoredBuild.storage.push({
+          ...fullComponent,
+          uniqueId: `${fullComponent.id}_${Date.now()}_${Math.random()}`
+        });
+        break;
+      default:
+        console.warn(`Неизвестная категория: ${fullComponent.category}`);
+    }
+  });
+
+  return { restoredBuild, itemsForContext };
+}
+
+const EDIT_DRAFT_ID_KEY = 'pc_build_edit_id';
+const EDIT_FORCE_RELOAD_KEY = 'pc_edit_force_reload';
+
+function parseBuildFromLocalStorage(emptyBuild) {
+  const saved = localStorage.getItem('pc_build');
+  if (!saved) return null;
+  try {
+    const parsed = JSON.parse(saved);
+    return {
+      ...emptyBuild,
+      ...parsed,
+      ram: Array.isArray(parsed.ram) ? parsed.ram : [],
+      storage: Array.isArray(parsed.storage) ? parsed.storage : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildItemsForContextFromSlots(build) {
+  const items = [];
+  const push = (comp) => {
+    if (comp?.id) items.push({ id: comp.id, name: comp.name || '' });
+  };
+  push(build.cpu);
+  push(build.motherboard);
+  push(build.gpu);
+  push(build.psu);
+  push(build.cooling);
+  (build.ram || []).forEach(push);
+  (build.storage || []).forEach(push);
+  return items;
+}
+
 function Configurator({ openAuthModal }) {
   const { components, setComponents, clearBuild } = useContext(BuildContext);
   const location = useLocation();
@@ -75,14 +174,24 @@ function Configurator({ openAuthModal }) {
   const processedStateRef = useRef(null);
   // Режим работы: 'free' (свободный) или 'step' (пошаговый)
   const mode = searchParams.get('mode') || 'free';
-  // mode=edit → id в URL; sessionStorage — запасной вариант при навигации в каталог
-  const editBuildId = mode === 'edit'
-    ? (searchParams.get('id') || sessionStorage.getItem('pc_edit_id') || null)
-    : null;
+  // ID редактируемой сборки: из URL или sessionStorage (сохраняется при переходе в каталог)
+  const editBuildId = searchParams.get('id') || sessionStorage.getItem('pc_edit_id') || null;
+  const [isEditVerified, setIsEditVerified] = useState(!editBuildId);
+  const [isLoadingEditAccess, setIsLoadingEditAccess] = useState(false);
+  const isEditingBuild = Boolean(editBuildId) && isEditVerified;
   const editBuildNameRef = useRef(
     location.state?.buildName ?? sessionStorage.getItem('pc_edit_name') ?? ''
   );
   const isInitialized = useRef(false);
+  const verifiedBuildIdRef = useRef(null);
+  const pendingSaveAfterAuthRef = useRef(false);
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem('accessToken'));
+
+  const clearEditSession = () => {
+    sessionStorage.removeItem('pc_edit_id');
+    sessionStorage.removeItem('pc_edit_name');
+    verifiedBuildIdRef.current = null;
+  };
 
   const EMPTY_BUILD = {
     cpu: null,
@@ -126,6 +235,18 @@ function Configurator({ openAuthModal }) {
   const [stepComponents, setStepComponents] = useState([]);
   const [loadingComponents, setLoadingComponents] = useState(false);
 
+  const powerOpts = useMemo(() => ({ hasRgb, caseFans }), [hasRgb, caseFans]);
+  const rawPower = useMemo(
+    () => calculateBuildPowerRaw(build, powerOpts),
+    [build, powerOpts]
+  );
+  const recommendedPsu = useMemo(
+    () => calculateBuildPower(build, powerOpts),
+    [build, powerOpts]
+  );
+  const [appReq, setAppReq] = useState(null);
+  const [appReqLoading, setAppReqLoading] = useState(false);
+
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [buildName, setBuildName] = useState(
     () => sessionStorage.getItem('pc_edit_name') || ''
@@ -133,98 +254,46 @@ function Configurator({ openAuthModal }) {
   const [autoName, setAutoName] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [saveNotification, setSaveNotification] = useState('');
+  const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+
+  useEffect(() => {
+    if (!build.cpu || !build.gpu) {
+      setAppReq(null);
+      setAppReqLoading(false);
+      return undefined;
+    }
+    const ctrl = new AbortController();
+    setAppReqLoading(true);
+    fetchAppRequirements(build, ctrl.signal)
+      .then((data) => setAppReq(data))
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          setAppReq({ available: false, message: 'Не удалось проверить требования приложений.' });
+        }
+      })
+      .finally(() => setAppReqLoading(false));
+    return () => ctrl.abort();
+  }, [build.cpu, build.gpu, build.ram]);
 
   useEffect(() => {
     if (isInitialized.current) return;
 
-    // РЕЖИМ РЕДАКТИРОВАНИЯ СБОРКИ
-    if (location.state?.loadSavedComponents && Array.isArray(location.state.loadSavedComponents)) {
-      
-      const restoredBuild = { cpu: null, motherboard: null, gpu: null, ram: [], storage: [], psu: null, cooling: null };
-      const itemsForContext = [];
+    // Редактирование: состав и права загружаются с API (см. verifyEditAccess)
+    if (editBuildId) {
+      isInitialized.current = true;
+      return;
+    }
 
-      location.state.loadSavedComponents.forEach(item => {
-        // Извлекаем полные данные из настроенного нами component_details
-        const fullComponent = item.component_details;
-        if (!fullComponent) return;
-
-        itemsForContext.push({ id: fullComponent.id, name: fullComponent.name });
-
-        // Раскладываем строго по вашему системному полю category из базы данных
-        // Раскладываем по слотам с учётом категорий из вашего API
-        switch (fullComponent.category) {
-          case 'cpus':
-            restoredBuild.cpu = fullComponent;
-            break;
-            
-          case 'motherboards':
-            restoredBuild.motherboard = fullComponent;
-            break;
-            
-          // Добавляем 'gpus' (для видеокарты)
-          case 'videocards':
-          case 'gpus':
-            restoredBuild.gpu = fullComponent;
-            break;
-            
-          // Добавляем 'coolings' (для кулера)
-          case 'coolers':
-          case 'coolings':
-            restoredBuild.cooling = fullComponent;
-            break;
-            
-          // Добавляем 'psus' (для блока питания)
-          case 'power-supplies':
-          case 'psus':
-            restoredBuild.psu = fullComponent;
-            break;
-            
-          case 'memory':
-          case 'rams':
-            restoredBuild.ram.push({ ...fullComponent, uniqueId: fullComponent.id + '_' + Date.now() + Math.random() });
-            break;
-            
-          case 'storages':
-            restoredBuild.storage.push({ ...fullComponent, uniqueId: fullComponent.id + '_' + Date.now() + Math.random() });
-            break;
-            
-          default:
-            console.warn(`Неизвестная категория на фронтенде: ${fullComponent.category}`);
-        }
-      });
-
-      setComponents(itemsForContext);
-      setBuild(restoredBuild);
-      localStorage.setItem('pc_build', JSON.stringify(restoredBuild));
-
-      // Восстанавливаем сопутствующие флаги из профиля
-      if (location.state.has_rgb !== undefined) {
-        setHasRgb(location.state.has_rgb);
-        localStorage.setItem('pc_build_rgb', location.state.has_rgb);
-      }
-      if (location.state.cooler_count !== undefined) {
-        setCaseFans(parseInt(location.state.cooler_count, 10) || 0);
-        localStorage.setItem('pc_build_fans', location.state.cooler_count);
-      }
-      if (location.state.buildName) {
-        editBuildNameRef.current = location.state.buildName;
-        setBuildName(location.state.buildName);
-      }
-      const editId = searchParams.get('id');
-      if (editId) {
-        sessionStorage.setItem('pc_edit_id', editId);
-        sessionStorage.setItem('pc_edit_name', location.state.buildName || '');
-      }
-    } 
     // РЕЖИМ ЧИСТОГО СОЗДАНИЯ С НУЛЯ
-    else if (!location.state?.chosenComponent && mode !== 'edit') {
+    if (!location.state?.chosenComponent && mode !== 'edit') {
       clearBuild();
       sessionStorage.removeItem('pc_edit_id');
       sessionStorage.removeItem('pc_edit_name');
       localStorage.removeItem('pc_build');
       localStorage.removeItem('pc_build_rgb');
       localStorage.removeItem('pc_build_fans');
+      sessionStorage.removeItem(EDIT_DRAFT_ID_KEY);
       setBuild({ ...EMPTY_BUILD });
       setHasRgb(false);
       setCaseFans(0);
@@ -238,7 +307,10 @@ function Configurator({ openAuthModal }) {
   // Синхронизация сборки, RGB и вентиляторов с localStorage
   useEffect(() => {
     localStorage.setItem('pc_build', JSON.stringify(build));
-  }, [build]);
+    if (editBuildId) {
+      sessionStorage.setItem(EDIT_DRAFT_ID_KEY, String(editBuildId));
+    }
+  }, [build, editBuildId]);
 
   useEffect(() => {
     localStorage.setItem('pc_build_rgb', hasRgb);
@@ -248,11 +320,119 @@ function Configurator({ openAuthModal }) {
     localStorage.setItem('pc_build_fans', caseFans);
   }, [caseFans]);
 
-  // Авто-открытие сохранения после успешной авторизации (только для новой сборки)
+  // Проверка владельца (один раз на id; без сброса экрана при повторных рендерах)
+  useEffect(() => {
+    if (!editBuildId) {
+      verifiedBuildIdRef.current = null;
+      setIsEditVerified(true);
+      setIsLoadingEditAccess(false);
+      return;
+    }
+
+    const buildIdStr = String(editBuildId);
+    if (verifiedBuildIdRef.current === buildIdStr) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const verifyEditAccess = async () => {
+      const token = localStorage.getItem('accessToken');
+      if (!token) {
+        setIsEditVerified(false);
+        setIsLoadingEditAccess(false);
+        openAuthModal();
+        return;
+      }
+
+      setIsLoadingEditAccess(true);
+
+      try {
+        const res = await fetch(`/api/configurations/${buildIdStr}/`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (cancelled) return;
+
+        if (res.status === 401) {
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          openAuthModal();
+          return;
+        }
+
+        if (!res.ok) {
+          clearEditSession();
+          alert('Сборка не найдена или у вас нет прав на её редактирование.');
+          navigate('/profile', { replace: true });
+          return;
+        }
+
+        const data = await res.json();
+        const forceReload = sessionStorage.getItem(EDIT_FORCE_RELOAD_KEY) === '1';
+        sessionStorage.removeItem(EDIT_FORCE_RELOAD_KEY);
+
+        const draftMatches = sessionStorage.getItem(EDIT_DRAFT_ID_KEY) === buildIdStr;
+        const localBuild = !forceReload && draftMatches ? parseBuildFromLocalStorage(EMPTY_BUILD) : null;
+
+        let restoredBuild;
+        let itemsForContext;
+
+        if (localBuild) {
+          restoredBuild = localBuild;
+          itemsForContext = buildItemsForContextFromSlots(restoredBuild);
+          setHasRgb(localStorage.getItem('pc_build_rgb') === 'true');
+          const fans = parseInt(localStorage.getItem('pc_build_fans'), 10) || 0;
+          setCaseFans(fans);
+        } else {
+          const mapped = mapConfigurationItemsToBuild(data.items);
+          restoredBuild = mapped.restoredBuild;
+          itemsForContext = mapped.itemsForContext;
+          setHasRgb(Boolean(data.has_rgb));
+          localStorage.setItem('pc_build_rgb', String(data.has_rgb));
+          const fans = parseInt(data.cooler_count, 10) || 0;
+          setCaseFans(fans);
+          localStorage.setItem('pc_build_fans', String(fans));
+        }
+
+        setComponents(itemsForContext);
+        setBuild(restoredBuild);
+        localStorage.setItem('pc_build', JSON.stringify(restoredBuild));
+        sessionStorage.setItem(EDIT_DRAFT_ID_KEY, buildIdStr);
+        editBuildNameRef.current = data.name || '';
+        setBuildName(data.name || '');
+        sessionStorage.setItem('pc_edit_id', buildIdStr);
+        sessionStorage.setItem('pc_edit_name', data.name || '');
+        verifiedBuildIdRef.current = buildIdStr;
+        setIsEditVerified(true);
+
+        if (searchParams.get('mode') !== 'edit' || searchParams.get('id') !== buildIdStr) {
+          setSearchParams({ mode: 'edit', id: buildIdStr }, { replace: true });
+        }
+      } catch {
+        if (!cancelled) {
+          clearEditSession();
+          alert('Не удалось загрузить сборку для редактирования.');
+          navigate('/profile', { replace: true });
+        }
+      } finally {
+        if (!cancelled) setIsLoadingEditAccess(false);
+      }
+    };
+
+    verifyEditAccess();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editBuildId, authToken]);
+
   useEffect(() => {
     const handleAuthSuccess = () => {
-      if (localStorage.getItem('accessToken') && !editBuildId) {
-        setIsSaveModalOpen(true);
+      setAuthToken(localStorage.getItem('accessToken'));
+      if (pendingSaveAfterAuthRef.current && localStorage.getItem('accessToken')) {
+        pendingSaveAfterAuthRef.current = false;
+        if (!editBuildId) {
+          setIsSaveModalOpen(true);
+        }
       }
     };
     window.addEventListener('auth_success', handleAuthSuccess);
@@ -294,7 +474,7 @@ function Configurator({ openAuthModal }) {
         } else if (currentStep.id === 'storage' && build.motherboard) {
           url += `motherboard_id=${build.motherboard.id}`;
         } else if (currentStep.id === 'psu') {
-          url += `min_power=${totalTdp}`;
+          url += `min_power=${recommendedPsu}`;
         }
         
 
@@ -325,7 +505,7 @@ function Configurator({ openAuthModal }) {
     };
 
     fetchStepComponents();
-  }, [currentStepIndex, mode, build.motherboard, build.cpu, build.gpu]);
+  }, [currentStepIndex, mode, build.motherboard, build.cpu, build.gpu, recommendedPsu]);
 
  // Обработка перехода обратно из каталога (для свободного режима)
   // Обработка перехода обратно из каталога (для свободного режима)
@@ -350,6 +530,9 @@ function Configurator({ openAuthModal }) {
         }
         // Принудительно дублируем запись в localStorage в этот же момент
         localStorage.setItem('pc_build', JSON.stringify(updatedBuild));
+        if (editBuildId) {
+          sessionStorage.setItem(EDIT_DRAFT_ID_KEY, String(editBuildId));
+        }
         return updatedBuild;
       });
 
@@ -409,33 +592,13 @@ function Configurator({ openAuthModal }) {
     }
   };
 
-  const clearEditSession = () => {
-    sessionStorage.removeItem('pc_edit_id');
-    sessionStorage.removeItem('pc_edit_name');
-  };
-
   const parseToNumber = (val) => {
     if (val === undefined || val === null) return 0;
     const parsed = parseInt(val, 10);
     return isNaN(parsed) ? 0 : parsed;
   };
 
-  const countPhysicalRamModules = () => {
-    let count = 0;
-    if (!build.ram) return 0;
-    build.ram.forEach(item => {
-      const nameLower = String(item.name || '').toLowerCase();
-      const kitMatch = nameLower.match(/(\d+)x/);
-      if (kitMatch) {
-        count += parseInt(kitMatch[1], 10);
-      } else if (nameLower.includes('кит') || nameLower.includes('комплект')) {
-        count += 2; 
-      } else {
-        count += 1; 
-      }
-    });
-    return count;
-  };
+  const countPhysicalRamModules = () => countRamModules(build.ram);
 
   const getItemPhysicalModulesCount = (item) => {
     const nameLower = String(item.name || '').toLowerCase();
@@ -446,33 +609,6 @@ function Configurator({ openAuthModal }) {
   };
 
   const psuWattage = build.psu ? parseToNumber(build.psu.wattage) : 0;
-
-  const calculateTotalTdp = () => {
-    let tdp = 0;
-    const hasAnyComponent = build.cpu || build.motherboard || build.gpu || build.ram.length > 0 || build.storage.length > 0 || build.cooling;
-    
-    if (!hasAnyComponent) return 0;
-
-    // Потребление материнской платы: ~50 Вт при наличии МП, иначе ~10 Вт (bare minimum)
-    if (build.motherboard) tdp += 50;
-    else tdp += 10;
-
-    if (build.cpu) tdp += parseToNumber(build.cpu.tdp);
-    if (build.gpu) tdp += parseToNumber(build.gpu.tdp);
-    
-    // Добавляем 5 Вт, если выбран кулер процессора
-    if (build.cooling) tdp += 5;
-    
-    tdp += countPhysicalRamModules() * 5;
-    if (build.storage) tdp += build.storage.length * 7;
-    if (hasRgb) tdp += 15;
-    
-    // Каждые корпусные кулеры берут по 2 Вт
-    tdp += Math.min(Math.max(caseFans, 0), 20) * 2;
-
-    return Math.round(tdp * 1.10); 
-  };
-  const totalTdp = calculateTotalTdp();
   const totalPhysicalModules = countPhysicalRamModules();
   const getValidationMessages = () => {
     const errors = [];
@@ -513,6 +649,14 @@ function Configurator({ openAuthModal }) {
             errors.push({ 
               slot: 'ram', 
               text: `КРИТИЧЕСКАЯ ОШИБКА: Несовместимость поколений ОЗУ! Материнская плата поддерживает стандарт ${mbRamType.toUpperCase()}, а выбранная планка памяти является ${ramType.toUpperCase()}. Они физически не вставятся в слот.` 
+            });
+          }
+          const ramSpeed = parseToNumber(item.speed_mhz);
+          const mbMaxSpeed = parseToNumber(motherboard.ram_speed);
+          if (ramSpeed > 0 && mbMaxSpeed > 0 && ramSpeed > mbMaxSpeed) {
+            warnings.push({
+              slot: 'ram',
+              text: `Частота ОЗУ ${ramSpeed} МГц выше заявленного максимума платы (${mbMaxSpeed} МГц). Память будет работать на пониженной частоте.`
             });
           }
         });
@@ -566,13 +710,65 @@ function Configurator({ openAuthModal }) {
       }
     }
 
-    if (gpu && psu) {
-      if (psuWattage > 0 && psuWattage < totalTdp) {
+    if (psu) {
+      const rec = calculateBuildPower(build, { hasRgb, caseFans });
+      if (psuWattage > 0 && psuWattage < rec) {
         errors.push({
           slot: 'psu',
-          text: `КРИТИЧЕСКАЯ ОШИБКА: Нехватка общей мощности БП! Нагрузка системы ~${totalTdp} Вт, номинал БП — ${psuWattage} Вт.`
+          text: `КРИТИЧЕСКАЯ ОШИБКА: БП недостаточен! Рекомендуется от ${rec} Вт (с запасом 25%), выбрано ${psuWattage} Вт.`
         });
       }
+    }
+
+    if (gpu && psu) {
+      const gpuConn = String(gpu.power_connectors || '').toLowerCase();
+      const pcie12 = parseToNumber(psu.connectors_pcie_12pin);
+      const pcie8 = parseToNumber(psu.connectors_pcie_8pin) + parseToNumber(psu.connectors_pcie_6_2pin);
+      if ((gpuConn.includes('16-pin') || gpuConn.includes('12vhpwr')) && pcie12 < 1) {
+        warnings.push({
+          slot: 'psu',
+          text: 'Видеокарта рассчитана на разъём 12VHPWR (16-pin), у выбранного БП его нет — может понадобиться переходник.'
+        });
+      }
+      const need8pin = (gpuConn.match(/8-pin/g) || []).length + (gpuConn.includes('6-pin') ? 1 : 0);
+      if (need8pin >= 2 && pcie8 < 2) {
+        warnings.push({
+          slot: 'psu',
+          text: `У GPU указано питание «${gpu.power_connectors}», а у БП недостаточно PCIe-разъёмов (8-pin/6+2-pin: ${pcie8}).`
+        });
+      }
+    }
+
+    if (motherboard && build.storage?.length > 0) {
+      const m2Slots = parseToNumber(motherboard.m2_slots);
+      const sataPorts = parseToNumber(motherboard.sata_ports);
+      let m2Used = 0;
+      let sataUsed = 0;
+      build.storage.forEach(disk => {
+        const ff = String(disk.form_factor || '').toLowerCase();
+        const iface = String(disk.interface || '').toLowerCase();
+        if (ff.includes('m.2') || iface.includes('nvme') || iface.includes('pcie')) m2Used += 1;
+        else sataUsed += 1;
+      });
+      if (m2Slots > 0 && m2Used > m2Slots) {
+        errors.push({
+          slot: 'storage',
+          text: `КРИТИЧЕСКАЯ ОШИБКА: M.2 накопителей (${m2Used}) больше, чем слотов на плате (${m2Slots}).`
+        });
+      }
+      if (sataPorts > 0 && sataUsed > sataPorts) {
+        warnings.push({
+          slot: 'storage',
+          text: `SATA-накопителей (${sataUsed}) больше портов платы (${sataPorts}). Потребуется PCIe-адаптер или хаб.`
+        });
+      }
+    }
+
+    if (cpu && !motherboard) {
+      warnings.push({
+        slot: 'motherboard',
+        text: `Выбран процессор ${cpu.socket}. Добавьте материнскую плату с тем же сокетом.`
+      });
     }
 
     return { errors, warnings };
@@ -635,61 +831,82 @@ function Configurator({ openAuthModal }) {
     }
   };
 
+  const getComponentIds = () => [
+    build.cpu?.id,
+    build.motherboard?.id,
+    build.gpu?.id,
+    build.psu?.id,
+    build.cooling?.id,
+    ...build.ram.map(r => r.id),
+    ...build.storage.map(s => s.id)
+  ].filter(id => id !== undefined && id !== null);
+
+  const buildPayload = (name) => ({
+    name,
+    total_power: recommendedPsu,
+    component_ids: getComponentIds(),
+    has_rgb: hasRgb,
+    cooler_count: caseFans
+  });
+
+  const handleAuthExpired = () => {
+    alert('Сессия истекла. Пожалуйста, войдите заново.');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('user');
+    window.location.reload();
+  };
+
+  const updateExistingBuild = async (token, name) => {
+    const res = await fetch(`/api/configurations/${editBuildId}/`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify(buildPayload(name))
+    });
+
+    if (res.status === 401) {
+      handleAuthExpired();
+      return false;
+    }
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg = data.detail || data.name?.[0] || 'Не удалось обновить сборку.';
+      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    }
+
+    return true;
+  };
+
+  const handleFinishEditSuccess = () => {
+    setSuccessMessage('Сборка успешно сохранена!');
+    setIsSuccessModalOpen(true);
+  };
+
+  const handleSuccessModalClose = () => {
+    setIsSuccessModalOpen(false);
+    setSuccessMessage('');
+    clearEditSession();
+    handleClearBuild();
+    clearBuild();
+    navigate('/profile');
+  };
+
   const handleOpenSaveModal = async () => {
     const token = localStorage.getItem('accessToken');
     if (!token) {
+      pendingSaveAfterAuthRef.current = true;
       openAuthModal();
       return;
     }
 
-    // ── РЕЖИМ РЕДАКТИРОВАНИЯ: сохраняем без модалки ──
-    if (editBuildId) {
+    // ── РЕДАКТИРОВАНИЕ: PUT без модалки создания ──
+    if (isEditingBuild) {
       setIsSaving(true);
       try {
-        const allComponentIds = [
-          build.cpu?.id,
-          build.motherboard?.id,
-          build.gpu?.id,
-          build.psu?.id,
-          build.cooling?.id,
-          ...build.ram.map(r => r.id),
-          ...build.storage.map(s => s.id)
-        ].filter(id => id !== undefined && id !== null);
-
-        const res = await fetch(`/api/configurations/${editBuildId}/`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({
-            name: buildName || editBuildNameRef.current || 'Моя сборка',
-            total_power: totalTdp,
-            component_ids: allComponentIds,
-            has_rgb: hasRgb,
-            cooler_count: caseFans
-          })
-        });
-
-        if (res.status === 401) {
-          alert('Сессия истекла. Пожалуйста, войдите заново.');
-          localStorage.removeItem('accessToken');
-          localStorage.removeItem('refreshToken');
-          localStorage.removeItem('user');
-          window.location.reload();
-          return;
-        }
-
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.detail || 'Не удалось обновить сборку.');
-        }
-
-        setSaveNotification('Сборка успешно обновлена!');
-        setTimeout(() => {
-          setSaveNotification('');
-          clearEditSession();
-          handleClearBuild();
-          clearBuild();
-          navigate('/profile');
-        }, 1800);
+        const name = buildName.trim() || editBuildNameRef.current || 'Моя сборка';
+        const ok = await updateExistingBuild(token, name);
+        if (ok) handleFinishEditSuccess();
       } catch (err) {
         alert(err.message || 'Ошибка при обновлении сборки.');
       } finally {
@@ -698,7 +915,7 @@ function Configurator({ openAuthModal }) {
       return;
     }
 
-    // ── РЕЖИМ СОЗДАНИЯ: открываем модалку ──
+    // ── НОВАЯ СБОРКА: модалка с именем ──
     setIsSaveModalOpen(true);
   };
 
@@ -706,17 +923,30 @@ function Configurator({ openAuthModal }) {
     const token = localStorage.getItem('accessToken');
     if (!token) return;
 
-    // Защитная проверка: Имя должно быть заполнено, либо выбран чекбокс авто-имени
+    // На случай, если модалка создания открылась при редактировании — обновляем, не создаём
+    if (isEditingBuild) {
+      setIsSaveModalOpen(false);
+      setIsSaving(true);
+      try {
+        const name = buildName.trim() || editBuildNameRef.current || 'Моя сборка';
+        const ok = await updateExistingBuild(token, name);
+        if (ok) handleFinishEditSuccess();
+      } catch (err) {
+        alert(err.message || 'Ошибка при обновлении сборки.');
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
     if (!autoName && !buildName.trim()) return;
 
     setSaveError('');
     setIsSaving(true);
 
-    const isEditing = !!editBuildId;
-
     try {
       // === ПРОВЕРКА ЛИМИТА В 5 СБОРОК (только при создании новой) ===
-      if (!isEditing) {
+      {
         const checkRes = await fetch('/api/configurations/', {
           method: 'GET',
           headers: {
@@ -733,7 +963,7 @@ function Configurator({ openAuthModal }) {
           return;
         }
 
-        if (checkRes.ok) {
+        if (checkRes.ok && localStorage.getItem('userRole') !== 'admin') {
           const userBuilds = await checkRes.json();
           if (userBuilds && userBuilds.length >= 5) {
             setSaveError('Лимит исчерпан! Вы можете сохранить не более 5 конфигураций ПК. Пожалуйста, перейдите в личный кабинет и удалите одну из старых сборок, чтобы освободить место.');
@@ -744,34 +974,14 @@ function Configurator({ openAuthModal }) {
       }
 
       const finalName = autoName ? "Моя сборка ПК " + new Date().toLocaleDateString() : buildName.trim();
-      const allComponentIds = [
-        build.cpu?.id,
-        build.motherboard?.id,
-        build.gpu?.id,
-        build.psu?.id,
-        build.cooling?.id,
-        ...build.ram.map(r => r.id),
-        ...build.storage.map(s => s.id)
-      ].filter(id => id !== undefined && id !== null);
 
-      const buildData = {
-        name: finalName,
-        total_power: totalTdp,
-        component_ids: allComponentIds,
-        has_rgb: hasRgb,
-        cooler_count: caseFans
-      };
-
-      const url = isEditing ? `/api/configurations/${editBuildId}/` : '/api/configurations/';
-      const method = isEditing ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method: method,
+      const res = await fetch('/api/configurations/', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(buildData)
+        body: JSON.stringify(buildPayload(finalName))
       });
 
       if (res.status === 401) {
@@ -788,10 +998,8 @@ function Configurator({ openAuthModal }) {
         throw new Error(data.detail || 'Не удалось сохранить сборку. Попробуйте позже.');
       }
 
-      // Успешный финал
       setIsSaveModalOpen(false);
       setBuildName('');
-      if (isEditing) clearEditSession();
       handleClearBuild();
       clearBuild();
       navigate('/profile');
@@ -838,10 +1046,98 @@ function Configurator({ openAuthModal }) {
   // Проверка валидности сохранения для кнопки
   const isSaveDisabled = !autoName && !buildName.trim();
 
+  const stepPanelCardStyle = {
+    ...panelCardStyle,
+    maxHeight: 'calc(100vh - 100px)',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  };
+
+  const stepPanelMiddleStyle = {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    paddingRight: '2px',
+  };
+
+  const stepPanelFooterStyle = {
+    flexShrink: 0,
+    borderTop: '1px solid #2c2c44',
+    paddingTop: '14px',
+    marginTop: '12px',
+    backgroundColor: '#1c1c2e',
+  };
+
+  const stepCompositionBlockStyle = {
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    paddingBottom: '12px',
+    borderBottom: '1px solid #2c2c44',
+  };
+
+  const validationSectionStyle = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    flexShrink: 0,
+    marginBottom: '14px',
+    padding: '12px',
+    backgroundColor: '#12121e',
+    border: '1px solid #2c2c44',
+    borderRadius: '10px',
+  };
+
+  const compatibilityReports = !isBuildEmpty ? (
+    <>
+      {errors.map((err, idx) => (
+        <div key={`err-${idx}`} style={errorReportStyle}>
+          <ShieldAlert size={18} color="#ef4444" style={{ flexShrink: 0, marginTop: '2px' }} />
+          <span style={reportTextStyle}>{err.text}</span>
+        </div>
+      ))}
+      {warnings.map((warn, idx) => (
+        <div key={`warn-${idx}`} style={warningReportStyle}>
+          <AlertTriangle size={18} color="#f59e0b" style={{ flexShrink: 0, marginTop: '2px' }} />
+          <span style={reportTextStyle}>{warn.text}</span>
+        </div>
+      ))}
+      {errors.length === 0 && (
+        <div style={successReportStyle}>
+          <CheckCircle size={20} color="#10b981" style={{ flexShrink: 0 }} />
+          <div>
+            <strong style={{ display: 'block', color: '#10b981', fontSize: '14px' }}>Все узлы согласованы</strong>
+          </div>
+        </div>
+      )}
+    </>
+  ) : null;
+
   return (
     <div style={containerStyle}>
+      {isLoadingEditAccess && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 2000,
+          backgroundColor: 'rgba(9, 9, 15, 0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: '#e4e4e7', fontSize: '15px', fontWeight: '600'
+        }}>
+          Проверка доступа к сборке...
+        </div>
+      )}
       <header style={headerStyle}>
         <h1 style={titleStyle}>Конфигуратор системного блока</h1>
+        {isEditingBuild && (
+          <p style={{ color: '#60a5fa', fontSize: '13px', marginTop: '8px' }}>
+            Режим редактирования: {buildName || editBuildNameRef.current}
+          </p>
+        )}
         <p style={subtitleStyle}>Интеллектуальная проверка линий питания, сокетов и лимитов нагрузки</p>
       </header>
 
@@ -1104,13 +1400,23 @@ function Configurator({ openAuthModal }) {
         </div>
 
         <div style={stickyPanelStyle}>
-          <div style={panelCardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div style={mode === 'step' ? stepPanelCardStyle : panelCardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexShrink: 0 }}>
               <h3 style={panelTitleStyle}>Текущий состав</h3>
               {!isBuildEmpty && <button onClick={handleClearBuild} style={clearBuildButtonStyle}>Очистить всё</button>}
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px', borderBottom: '1px solid #2c2c44', paddingBottom: '12px' }}>
+            {compatibilityReports && (
+              <div style={validationSectionStyle}>
+                <div style={{ fontSize: '11px', fontWeight: '700', color: '#0071e3', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                  Проверка совместимости
+                </div>
+                {compatibilityReports}
+              </div>
+            )}
+
+            {mode === 'step' && (
+            <div style={stepCompositionBlockStyle}>
   {STEPS.map(st => {
     const comp = build[st.id];
     const isArr = st.isArray;
@@ -1140,6 +1446,40 @@ function Configurator({ openAuthModal }) {
     );
   })}
 </div>
+            )}
+
+            <div style={stepPanelMiddleStyle}>
+            {mode !== 'step' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px', borderBottom: '1px solid #2c2c44', paddingBottom: '12px', flexShrink: 0 }}>
+  {STEPS.map(st => {
+    const comp = build[st.id];
+    const isArr = st.isArray;
+    return (
+      <div key={st.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+        <span style={{ color: '#a1a1aa' }}>{st.name}:</span>
+        <span style={{ 
+          color: comp && (!isArr || comp.length > 0) ? '#10b981' : '#71717a', 
+          fontWeight: '500', 
+          maxWidth: '200px', 
+          overflow: 'hidden', 
+          textOverflow: 'ellipsis', 
+          whiteSpace: 'nowrap' 
+        }}>
+          {isArr ? (
+            comp?.length > 0 ? (
+              st.category === 'memory' ? `${totalPhysicalModules} устр.` : `${comp.length} устр.`
+            ) : (
+              'Ожидание...'
+            )
+          ) : (
+            comp ? comp.name : 'Ожидание...'
+          )}
+        </span>
+      </div>
+    );
+  })}
+</div>
+            )}
 
             {!isBuildEmpty && (
               <div style={rgbCheckboxContainerStyle}>
@@ -1186,92 +1526,135 @@ function Configurator({ openAuthModal }) {
             {!isBuildEmpty && (
               <div style={tdpPanelStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
-                  <span style={{ color: '#a1a1aa', fontWeight: '500' }}>Потребление (+10% запаса):</span>
-                  <strong style={{ color: '#ffffff' }}>~{totalTdp} Вт</strong>
+                  <span style={{ color: '#a1a1aa', fontWeight: '500' }}>Пиковое потребление:</span>
+                  <strong style={{ color: '#ffffff' }}>~{rawPower} Вт</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                  <span style={{ color: '#a1a1aa', fontWeight: '500' }}>Мощность БП:</span>
-                  <strong style={{ color: psuWattage > 0 ? '#0071e3' : '#ef4444' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                  <span style={{ color: '#a1a1aa', fontWeight: '500' }}>Реком. БП (+25%):</span>
+                  <strong style={{ color: '#f59e0b' }}>от {recommendedPsu} Вт</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                  <span style={{ color: '#a1a1aa', fontWeight: '500' }}>Выбранный БП:</span>
+                  <strong style={{ color: psuWattage > 0 && psuWattage >= recommendedPsu ? '#0071e3' : '#ef4444' }}>
                     {psuWattage > 0 ? `${psuWattage} Вт` : 'Не выбран'}
                   </strong>
                 </div>
-              </div>
-            )}
-            
-            {isBuildEmpty ? (
-              <div style={emptyPanelState}>
-                <CheckCircle size={36} color="#a1a1aa" style={{ marginBottom: '10px' }} />
-                <span>Добавьте устройства, чтобы запустить проверку.</span>
-              </div>
-            ) : (
-              <div style={reportsContainerStyle}>
-                {errors.map((err, idx) => (
-                  <div key={`err-${idx}`} style={errorReportStyle}>
-                    <ShieldAlert size={18} color="#ef4444" style={{ flexShrink: 0, marginTop: '2px' }} />
-                    <span style={reportTextStyle}>{err.text}</span>
-                  </div>
-                ))}
-
-                {warnings.map((warn, idx) => (
-                  <div key={`warn-${idx}`} style={warningReportStyle}>
-                    <AlertTriangle size={18} color="#f59e0b" style={{ flexShrink: 0, marginTop: '2px' }} />
-                    <span style={reportTextStyle}>{warn.text}</span>
-                  </div>
-                ))}
-
-                {errors.length === 0 && (
-                  <div style={successReportStyle}>
-                    <CheckCircle size={20} color="#10b981" style={{ flexShrink: 0 }} />
-                    <div>
-                      <strong style={{ block: 'block', color: '#10b981', fontSize: '14px' }}>Все узлы согласованы</strong>
+                {build.cpu && build.gpu && (
+                  <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #2c2c44', fontSize: '12px' }}>
+                    <div style={{ color: '#0071e3', fontWeight: '700', marginBottom: '8px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Требования приложений
                     </div>
+                    {appReqLoading && (
+                      <p style={{ color: '#71717a', margin: 0 }}>Проверка требований…</p>
+                    )}
+                    {!appReqLoading && appReq?.available && (
+                      <>
+                        <p style={{ color: '#a1a1aa', margin: '0 0 8px', lineHeight: 1.4 }}>
+                          Видеокарта: <strong style={{ color: '#fff' }}>{appReq.matched_gpu}</strong>
+                          {' · '}индекс <strong style={{ color: '#fff' }}>{appReq.g3d_mark}</strong>
+                          {appReq.benchmark_percentile != null && (
+                            <span> (уровень выше {appReq.benchmark_percentile}% моделей в базе)</span>
+                          )}
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
+                          {(appReq.applications || []).map((app) => {
+                            const color = app.status === 'ok' ? '#10b981' : app.status === 'warning' ? '#f59e0b' : '#ef4444';
+                            return (
+                              <div
+                                key={app.id}
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  gap: '8px',
+                                  padding: '6px 8px',
+                                  borderRadius: '6px',
+                                  backgroundColor: 'rgba(255,255,255,0.03)',
+                                  border: `1px solid ${color}33`,
+                                }}
+                              >
+                                <span style={{ color: '#e4e4e7', fontWeight: 600 }}>{app.name}</span>
+                                <span style={{ color, fontSize: '11px', textAlign: 'right' }}>{app.label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p style={{ color: '#71717a', margin: '8px 0 0', fontSize: '10px', lineHeight: 1.35 }}>
+                          {appReq.disclaimer}
+                        </p>
+                      </>
+                    )}
+                    {!appReqLoading && appReq && !appReq.available && (
+                      <p style={{ color: '#f59e0b', margin: 0, lineHeight: 1.4 }}>{appReq.message}</p>
+                    )}
                   </div>
                 )}
               </div>
             )}
 
-            <div style={panelFooterStyle}>
-              <button 
-                onClick={handleOpenSaveModal}
-                disabled={isSaving || errors.length > 0 || (mode === 'step' ? !isBuildComplete : isBuildEmpty)}
-                style={{
-                  ...checkoutButtonStyle,
-                  backgroundColor: isSaving || errors.length > 0 || (mode === 'step' ? !isBuildComplete : isBuildEmpty) ? '#2c2c44' : '#0071e3',
-                  color: isSaving || errors.length > 0 || (mode === 'step' ? !isBuildComplete : isBuildEmpty) ? '#a1a1aa' : '#ffffff',
-                  cursor: isSaving || errors.length > 0 || (mode === 'step' ? !isBuildComplete : isBuildEmpty) ? 'not-allowed' : 'pointer'
-                }}
-              >
-                {isSaving ? 'Сохранение...' : editBuildId ? 'Сохранить изменения' : 'Сохранить конфигурацию'}
-              </button>
+            {isBuildEmpty && (
+              <div style={emptyPanelState}>
+                <CheckCircle size={36} color="#a1a1aa" style={{ marginBottom: '10px' }} />
+                <span>Добавьте устройства, чтобы запустить проверку.</span>
+              </div>
+            )}
+            </div>
+
+            <div style={mode === 'step' ? stepPanelFooterStyle : { ...panelFooterStyle, flexShrink: 0 }}>
               {mode === 'step' && !isBuildComplete && (
-                <p style={{ color: '#ef4444', fontSize: '11px', marginTop: '6px', textAlign: 'center' }}>
-                  Для сохранения необходимо полностью пройти все шаги мастера.
+                <p style={{
+                  color: '#f59e0b',
+                  fontSize: '12px',
+                  margin: '0 0 10px',
+                  textAlign: 'center',
+                  lineHeight: 1.45,
+                  fontWeight: '600',
+                }}>
+                  Пройдите все шаги мастера и заполните каждый слот — тогда станет доступно сохранение.
                 </p>
               )}
+              <button 
+                onClick={handleOpenSaveModal}
+                disabled={
+                  isSaving
+                  || (editBuildId && !isEditVerified)
+                  || errors.length > 0
+                  || (mode === 'step' ? !isBuildComplete : isBuildEmpty)
+                }
+                style={{
+                  ...checkoutButtonStyle,
+                  backgroundColor: isSaving || (editBuildId && !isEditVerified) || errors.length > 0 || (mode === 'step' ? !isBuildComplete : isBuildEmpty) ? '#2c2c44' : '#0071e3',
+                  color: isSaving || (editBuildId && !isEditVerified) || errors.length > 0 || (mode === 'step' ? !isBuildComplete : isBuildEmpty) ? '#a1a1aa' : '#ffffff',
+                  cursor: isSaving || (editBuildId && !isEditVerified) || errors.length > 0 || (mode === 'step' ? !isBuildComplete : isBuildEmpty) ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {isSaving ? 'Сохранение...' : isEditingBuild ? 'Сохранить изменения' : 'Сохранить конфигурацию'}
+              </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* МОДАЛЬНОЕ ОКНО СОХРАНЕНИЯ С ЖЕСТКОЙ ВАЛИДАЦИЕЙ КНОПКИ */}
-      {/* УВЕДОМЛЕНИЕ ОБ УСПЕШНОМ ОБНОВЛЕНИИ СБОРКИ */}
-      {saveNotification && (
-        <div style={{
-          position: 'fixed', top: '32px', left: '50%', transform: 'translateX(-50%)',
-          backgroundColor: '#0d2b1a', border: '1px solid #10b981', borderRadius: '12px',
-          padding: '16px 28px', zIndex: 9999, display: 'flex', alignItems: 'center',
-          gap: '12px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', minWidth: '280px',
-          justifyContent: 'center'
-        }}>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <circle cx="10" cy="10" r="10" fill="#10b981"/>
-            <path d="M6 10l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          <span style={{ color: '#10b981', fontWeight: '700', fontSize: '15px' }}>{saveNotification}</span>
+      {/* МОДАЛЬНОЕ ОКНО УСПЕШНОГО СОХРАНЕНИЯ (режим редактирования) */}
+      {isSuccessModalOpen && (
+        <div style={modalOverlayStyle} onClick={() => !isSaving && handleSuccessModalClose()}>
+          <div style={modalContentStyle} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+              <CheckCircle size={48} color="#10b981" />
+            </div>
+            <h2 style={{ ...modalTitleStyle, color: '#10b981' }}>Готово</h2>
+            <p style={{ ...modalSubtitleStyle, marginBottom: '28px' }}>{successMessage}</p>
+            <button
+              onClick={handleSuccessModalClose}
+              style={{ ...modalSubmitButtonStyle, width: '100%', flex: 'none' }}
+            >
+              Вернуться в личный кабинет
+            </button>
+          </div>
         </div>
       )}
 
-      {isSaveModalOpen && (
+      {/* МОДАЛЬНОЕ ОКНО СОХРАНЕНИЯ НОВОЙ СБОРКИ */}
+      {isSaveModalOpen && !isEditingBuild && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
             <button onClick={() => { if(!isSaving) setIsSaveModalOpen(false); }} style={modalCloseButtonStyle}>
@@ -1359,11 +1742,11 @@ const rowButtonStyle = { backgroundColor: '#1c1c2e', border: '1px solid #2c2c44'
 const activeRowButtonStyle = { backgroundColor: '#10b981', border: 'none', color: '#fff', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' };
 const wizardFooterActionsStyle = { display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #2c2c44', paddingTop: '16px' };
 
-const containerStyle = { backgroundColor: '#12121e', color: '#ffffff', minHeight: '100vh', padding: '40px 20px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', boxSizing: 'border-box' };
+const containerStyle = { backgroundColor: '#12121e', color: '#ffffff', minHeight: '100vh', padding: '40px 16px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', boxSizing: 'border-box', width: '100%', maxWidth: '100vw', overflowX: 'hidden' };
 const headerStyle = { marginBottom: '35px', textAlign: 'center' };
 const titleStyle = { fontSize: '28px', fontWeight: '800', margin: '0 0 8px 0', letterSpacing: '-0.5px' };
 const subtitleStyle = { fontSize: '14px', color: '#a1a1aa', margin: 0 };
-const workspaceStyle = { display: 'flex', gap: '30px', maxWidth: '1200px', margin: '0 auto', alignItems: 'flex-start' };
+const workspaceStyle = { display: 'flex', gap: '24px', maxWidth: '1200px', width: '100%', margin: '0 auto', alignItems: 'flex-start', boxSizing: 'border-box', overflowX: 'hidden' };
 const slotsContainerStyle = { flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '20px', minWidth: 0 };
 const slotCardStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1c1c2e', border: '1px solid #2c2c44', borderRadius: '14px', padding: '14px 20px', boxSizing: 'border-box' };
 const slotLeftStyle = { display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 };
@@ -1376,18 +1759,18 @@ const addButtonStyle = { backgroundColor: '#12121e', color: '#ffffff', border: '
 const addMoreButtonStyle = { backgroundColor: 'transparent', border: 'none', color: '#0071e3', fontSize: '12px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', outline: 'none' };
 const removeButtonStyle = { backgroundColor: 'transparent', color: '#ef4444', border: 'none', cursor: 'pointer', padding: '8px' };
 const clearBuildButtonStyle = { backgroundColor: 'transparent', border: 'none', color: '#ef4444', fontSize: '12px', fontWeight: '600', cursor: 'pointer' };
-const stickyPanelStyle = { width: '390px', position: 'sticky', top: '40px', flexShrink: 0 };
-const panelCardStyle = { backgroundColor: '#1c1c2e', border: '1px solid #2c2c44', borderRadius: '16px', padding: '24px', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', maxHeight: 'calc(100vh - 120px)' };
+const stickyPanelStyle = { width: 'min(390px, 100%)', maxWidth: '100%', position: 'sticky', top: '40px', flexShrink: 0, minWidth: 0 };
+const panelCardStyle = { backgroundColor: '#1c1c2e', border: '1px solid #2c2c44', borderRadius: '16px', padding: '24px', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', maxHeight: 'calc(100vh - 120px)', minWidth: 0, overflow: 'hidden' };
 const panelTitleStyle = { fontSize: '15px', fontWeight: '700', margin: 0, textTransform: 'uppercase', color: '#0071e3', letterSpacing: '0.5px' };
 const tdpPanelStyle = { backgroundColor: '#12121e', border: '1px solid #2c2c44', borderRadius: '10px', padding: '12px', marginBottom: '16px' };
 const rgbCheckboxContainerStyle = { backgroundColor: 'rgba(0, 113, 227, 0.05)', border: '1px dashed rgba(0, 113, 227, 0.3)', borderRadius: '10px', padding: '12px', marginBottom: '14px' };
 const checkboxStyle = { width: '16px', height: '16px', cursor: 'pointer', accentColor: '#0071e3' };
 const emptyPanelState = { display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', color: '#a1a1aa', fontSize: '13px', padding: '40px 10px', border: '1px dashed #2c2c44', borderRadius: '12px' };
-const reportsContainerStyle = { display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', paddingRight: '4px', marginBottom: '20px' };
-const errorReportStyle = { display: 'flex', gap: '10px', backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '10px', padding: '12px' };
-const warningReportStyle = { display: 'flex', gap: '10px', backgroundColor: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '10px', padding: '12px' };
-const successReportStyle = { display: 'flex', gap: '12px', backgroundColor: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '10px', padding: '14px' };
-const reportTextStyle = { fontSize: '13px', color: '#e4e4e7', lineHeight: '1.4', fontWeight: '500' };
+const reportsContainerStyle = { display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '4px', marginBottom: '20px', minWidth: 0, maxWidth: '100%' };
+const errorReportStyle = { display: 'flex', gap: '10px', alignItems: 'flex-start', minWidth: 0, width: '100%', maxWidth: '100%', boxSizing: 'border-box', backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '10px', padding: '12px' };
+const warningReportStyle = { display: 'flex', gap: '10px', alignItems: 'flex-start', minWidth: 0, width: '100%', maxWidth: '100%', boxSizing: 'border-box', backgroundColor: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '10px', padding: '12px' };
+const successReportStyle = { display: 'flex', gap: '12px', alignItems: 'flex-start', minWidth: 0, width: '100%', maxWidth: '100%', boxSizing: 'border-box', backgroundColor: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: '10px', padding: '14px' };
+const reportTextStyle = { flex: 1, minWidth: 0, fontSize: '13px', color: '#e4e4e7', lineHeight: '1.45', fontWeight: '500', wordBreak: 'break-word', overflowWrap: 'break-word' };
 const panelFooterStyle = { borderTop: '1px solid #2c2c44', paddingTop: '20px', marginTop: 'auto' };
 const checkoutButtonStyle = { width: '100%', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700' };
 
