@@ -62,25 +62,24 @@ class ConfigItemSerializer(serializers.ModelSerializer):
         base = {
             'id': component.id,
             'name': component.name,
-            'category': component.category,
+            'category': category,
             'manufacturer': component.manufacturer,
         }
 
         try:
-            if category == 'cpus' and hasattr(component, 'cpu'):
+            if category in ('cpus',) and hasattr(component, 'cpu'):
                 return {**base, **CPUSerializer(component.cpu).data}
-            elif category == 'motherboards' and hasattr(component, 'motherboard'):
+            elif category in ('motherboards',) and hasattr(component, 'motherboard'):
                 return {**base, **MotherboardSerializer(component.motherboard).data}
-            elif category == 'videocards' and hasattr(component, 'videocard'):
+            elif category in ('videocards', 'gpus', 'gpu') and hasattr(component, 'videocard'):
                 return {**base, **VideocardSerializer(component.videocard).data}
-            elif category == 'memory' and hasattr(component, 'memory'):
-                data = {**base, **MemorySerializer(component.memory).data}
-                return data
-            elif category == 'coolers' and hasattr(component, 'cpu_cooler'):
+            elif category in ('memory', 'rams', 'ram') and hasattr(component, 'memory'):
+                return {**base, **MemorySerializer(component.memory).data}
+            elif category in ('coolers', 'coolings', 'cooling') and hasattr(component, 'cpu_cooler'):
                 return {**base, **CPUCoolerSerializer(component.cpu_cooler).data}
-            elif category == 'power-supplies' and hasattr(component, 'power_supply'):
+            elif category in ('power-supplies', 'psus', 'psu') and hasattr(component, 'power_supply'):
                 return {**base, **PowerSupplySerializer(component.power_supply).data}
-            elif category == 'storages' and hasattr(component, 'storage'):
+            elif category in ('storages', 'storage') and hasattr(component, 'storage'):
                 return {**base, **StorageSerializer(component.storage).data}
         except Exception as e:
             print(f"Ошибка сериализации дочерних полей для компонента {component.id}: {e}")
@@ -94,9 +93,32 @@ class ConfigurationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Configuration
-        fields = ['id', 'user', 'user_username', 'name', 'is_public', 'total_power', 'has_rgb', 'cooler_count', 'items']
+        fields = [
+            'id', 'user', 'user_username', 'name', 'description', 'is_public',
+            'total_power', 'has_rgb', 'cooler_count', 'items',
+        ]
+
+
+class PublicConfigurationSerializer(serializers.ModelSerializer):
+    """Публичные сборки для главной и просмотра без авторизации."""
+    items = ConfigItemSerializer(many=True, read_only=True)
+    components_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Configuration
+        fields = [
+            'id', 'name', 'description', 'total_power', 'has_rgb', 'cooler_count',
+            'components_count', 'items',
+        ]
+
+    def get_components_count(self, obj):
+        return obj.items.count()
+
+
 class ConfigurationSaveSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
+    description = serializers.CharField(required=False, allow_blank=True, default='')
+    is_public = serializers.BooleanField(required=False, default=False)
     total_power = serializers.IntegerField(required=False, default=0)
     component_ids = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
     has_rgb = serializers.BooleanField(required=False, default=False)
@@ -129,6 +151,8 @@ class ConfigurationSaveSerializer(serializers.Serializer):
         configuration = Configuration.objects.create(
             user=user,
             name=name,
+            description=validated_data.get('description', ''),
+            is_public=validated_data.get('is_public', False),
             total_power=total_power,
             has_rgb=has_rgb,
             cooler_count=cooler_count,
@@ -138,6 +162,10 @@ class ConfigurationSaveSerializer(serializers.Serializer):
 
     def update(self, instance, validated_data):
         instance.name = validated_data.get('name', instance.name)
+        if 'description' in validated_data:
+            instance.description = validated_data['description']
+        if 'is_public' in validated_data:
+            instance.is_public = validated_data['is_public']
         instance.total_power = validated_data.get('total_power', instance.total_power)
         instance.has_rgb = validated_data.get('has_rgb', instance.has_rgb)
         instance.cooler_count = validated_data.get('cooler_count', instance.cooler_count)

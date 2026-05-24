@@ -52,7 +52,16 @@ def seed_db():
         ("Intel", "Core i9-14900KS", "LGA1700", 24, 32, 3.2, 6.2, 36, 150, True, 2),
         # LGA1851 (Core Ultra)
         ("Intel", "Core Ultra 5 245K", "LGA1851", 14, 14, 4.2, 5.2, 24, 125, True, 2),
-        ("Intel", "Core Ultra 7 265K", "LGA1851", 20, 20, 3.9, 5.5, 30, 125, True, 2)
+        ("Intel", "Core Ultra 7 265K", "LGA1851", 20, 20, 3.9, 5.5, 30, 125, True, 2),
+        # Дополнительные CPU
+        ("AMD", "Ryzen 5 5500", "AM4", 6, 12, 3.6, 4.2, 16, 65, False, 2),
+        ("AMD", "Ryzen 5 8600G", "AM5", 6, 12, 4.3, 5.0, 16, 65, True, 2),
+        ("Intel", "Core i5-12600K", "LGA1700", 10, 16, 3.7, 4.9, 20, 125, True, 2),
+        ("Intel", "Core i7-12700F", "LGA1700", 12, 20, 2.1, 4.9, 25, 65, False, 2),
+        ("AMD", "Ryzen 9 7900", "AM5", 12, 24, 3.7, 5.4, 64, 65, True, 2),
+        ("Intel", "Core i3-14100F", "LGA1700", 4, 8, 3.5, 4.7, 12, 58, False, 2),
+        ("AMD", "Ryzen 7 8700G", "AM5", 8, 16, 4.2, 5.0, 16, 65, True, 2),
+        ("Intel", "Core Ultra 9 285K", "LGA1851", 24, 24, 3.7, 5.7, 36, 125, True, 2),
     ]
 
     for item in cpus_data:
@@ -90,7 +99,14 @@ def seed_db():
         ("ASUS", "ROG MAXIMUS Z790 HERO", "LGA1700", "Z790", "ATX", 4, 192, "DDR5", 7800, "PCI-e 5.0", 3, 5, "M.2 NVMe", 6, True, True),
         # LGA1851
         ("MSI", "PRO Z890-A WIFI", "LGA1851", "Z890", "ATX", 4, 192, "DDR5", 9200, "PCI-e 5.0", 3, 4, "M.2 NVMe", 4, True, True),
-        ("ASUS", "ROG STRIX Z890-E GAMING WIFI", "LGA1851", "Z890", "ATX", 4, 192, "DDR5", 9066, "PCI-e 5.0", 3, 7, "M.2 NVMe", 4, True, True)
+        ("ASUS", "ROG STRIX Z890-E GAMING WIFI", "LGA1851", "Z890", "ATX", 4, 192, "DDR5", 9066, "PCI-e 5.0", 3, 7, "M.2 NVMe", 4, True, True),
+        # Дополнительные платы
+        ("ASRock", "A520M-HVS", "AM4", "A520", "Micro-ATX", 2, 64, "DDR4", 4733, "PCI-e 3.0", 1, 1, "M.2 NVMe", 4, False, False),
+        ("MSI", "PRO A620M-E", "AM5", "A620", "Micro-ATX", 2, 96, "DDR5", 6400, "PCI-e 4.0", 1, 1, "M.2 NVMe", 4, False, False),
+        ("GIGABYTE", "H610M H V2 DDR4", "LGA1700", "H610", "Micro-ATX", 2, 64, "DDR4", 3200, "PCI-e 4.0", 1, 1, "M.2 NVMe/SATA", 4, False, False),
+        ("ASUS", "TUF GAMING B650-PLUS WIFI", "AM5", "B650", "ATX", 4, 192, "DDR5", 7600, "PCI-e 4.0", 3, 3, "M.2 NVMe", 4, True, True),
+        ("MSI", "MAG Z790 TOMAHAWK WIFI", "LGA1700", "Z790", "ATX", 4, 192, "DDR5", 7800, "PCI-e 5.0", 3, 4, "M.2 NVMe", 6, True, True),
+        ("GIGABYTE", "X870E AORUS ELITE", "AM5", "X870E", "ATX", 4, 192, "DDR5", 8200, "PCI-e 5.0", 3, 4, "M.2 NVMe", 6, True, True),
     ]
 
     for item in mbs_data:
@@ -126,7 +142,11 @@ def seed_db():
         ("XFX", "Speedster QICK 319 RX 7700 XT", "RX 7700 XT", "AMD", 12, "PCI-e 4.0", "ATX", 245, "2x 8-pin", 335, "1x HDMI, 3x DisplayPort", 2599),
         ("Sapphire", "Radeon RX 7800 XT NITRO+", "RX 7800 XT", "AMD", 16, "PCI-e 4.0", "ATX", 288, "2x 8-pin", 320, "2x HDMI, 2x DisplayPort", 2565),
         ("PowerColor", "Hellhound Radeon RX 7900 XT", "RX 7900 XT", "AMD", 20, "PCI-e 4.0", "ATX", 315, "2x 8-pin", 320, "1x HDMI, 3x DisplayPort", 2500),
-        ("Sapphire", "Radeon RX 7900 XTX PULSE", "RX 7900 XTX", "AMD", 24, "PCI-e 4.0", "ATX", 355, "3x 8-pin", 313, "2x HDMI, 2x DisplayPort", 2525)
+        ("Sapphire", "Radeon RX 7900 XTX PULSE", "RX 7900 XTX", "AMD", 24, "PCI-e 4.0", "ATX", 355, "3x 8-pin", 313, "2x HDMI, 2x DisplayPort", 2525),
+        ("ASUS", "Dual GeForce RTX 3050 OC", "RTX 3050", "NVIDIA", 8, "PCI-e 4.0", "ATX", 115, "1x 8-pin", 205, "1x HDMI, 3x DisplayPort", 1807),
+        ("GIGABYTE", "Radeon RX 6600 EAGLE", "RX 6600", "AMD", 8, "PCI-e 4.0", "ATX", 140, "1x 8-pin", 200, "1x HDMI, 3x DisplayPort", 2491),
+        ("Palit", "GeForce RTX 5070 DUAL", "RTX 5070", "NVIDIA", 12, "PCI-e 5.0", "ATX", 250, "1x 16-pin (12VHPWR)", 250, "1x HDMI, 3x DisplayPort", 2580),
+        ("XFX", "Radeon RX 9070 XT MERC", "RX 9070 XT", "AMD", 16, "PCI-e 5.0", "ATX", 280, "2x 8-pin", 320, "1x HDMI, 3x DisplayPort", 2600),
     ]
 
     for item in gpus_data:
@@ -162,7 +182,12 @@ def seed_db():
         ("G.Skill", "Trident Z5 Neo RGB (Кит 2x16)", "DDR5", 32, 6400, "CL32-39-39", 1.4),
         ("Corsair", "Vengeance RGB DDR5 (Кит 2x32)", "DDR5", 64, 6000, "CL30-40-40", 1.4),
         ("G.Skill", "Trident Z5 RGB DDR5 (Кит 2x32)", "DDR5", 64, 7200, "CL36-46-46", 1.45),
-        ("Team Group", "T-Force Delta RGB (Кит 2x48)", "DDR5", 96, 6800, "CL36-46-46", 1.4)
+        ("Team Group", "T-Force Delta RGB (Кит 2x48)", "DDR5", 96, 6800, "CL36-46-46", 1.4),
+        ("Patriot", "Signature DDR4", "DDR4", 8, 2666, "CL19-19-19", 1.2),
+        ("Crucial", "DDR4 SODIMM", "DDR4", 16, 3200, "CL22-22-22", 1.2),
+        ("Kingston", "FURY Beast DDR5 24GB", "DDR5", 24, 5600, "CL40-40-40", 1.25),
+        ("Corsair", "Dominator Titanium DDR5 (Кит 2x24)", "DDR5", 48, 6400, "CL32-39-39", 1.4),
+        ("ADATA", "XPG Lancer DDR5 (Кит 2x32)", "DDR5", 64, 6000, "CL30-40-40", 1.35),
     ]
 
     for item in ram_data:
@@ -196,7 +221,10 @@ def seed_db():
         ("LIAN LI", "Galahad II Trinity 360", 27, "900 - 2450 RPM", 32.6, 350, "AM4, AM5, LGA1700"),
         ("MSI", "MAG CORELIQUID M360", 27, "500 - 2000 RPM", 34.3, 330, "AM4, AM5, LGA1700"),
         ("Deepcool", "LT720", 27, "500 - 2250 RPM", 32.9, 350, "AM4, AM5, LGA1700"),
-        ("ARCTIC", "Liquid Freezer III 420", 38, "200 - 1700 RPM", 32.0, 420, "AM4, AM5, LGA1700")
+        ("ARCTIC", "Liquid Freezer III 420", 38, "200 - 1700 RPM", 32.0, 420, "AM4, AM5, LGA1700"),
+        ("Thermalright", "Assassin X 120 R SE", 148, "1550 RPM", 25.0, 200, "AM4, AM5, LGA1700, LGA1851"),
+        ("Scythe", "Fuma 3", 154, "300 - 1800 RPM", 24.9, 220, "AM4, AM5, LGA1700"),
+        ("Cooler Master", "Hyper 212 Black Edition", 159, "650 - 2000 RPM", 26.0, 180, "AM4, AM5, LGA1700"),
     ]
 
     for item in coolers_data:
@@ -228,7 +256,10 @@ def seed_db():
         ("Super Flower", "Leadex VI Platinum PRO 850W", 850, "80+ Platinum", 1, 2, 0, 6, 0, 0, 9),
         ("Deepcool", "PX1000G", 1000, "80+ Gold", 1, 2, 0, 3, 0, 1, 8), # ATX 3.0
         ("Montech", "TITAN GOLD 1000W", 1000, "80+ Gold", 1, 2, 0, 5, 0, 1, 12), # ATX 3.0
-        ("Super Flower", "Leadex VII Gold 1300W", 1300, "80+ Gold", 1, 2, 0, 4, 0, 2, 12)  # ATX 3.0
+        ("Super Flower", "Leadex VII Gold 1300W", 1300, "80+ Gold", 1, 2, 0, 4, 0, 2, 12),  # ATX 3.0
+        ("be quiet!", "System Power 10 550W", 550, "80+ Bronze", 1, 1, 0, 2, 0, 0, 5),
+        ("Seasonic", "FOCUS GX-650", 650, "80+ Gold", 1, 1, 1, 4, 0, 0, 6),
+        ("FSP", "Hydro PTM Pro 1200W", 1200, "80+ Platinum", 1, 2, 0, 6, 0, 2, 10),
     ]
 
     for item in psus_data:
@@ -266,7 +297,11 @@ def seed_db():
         ("Kingston", "NV2", "SSD", "M.2 2280", 1000, "PCIe 4.0 x4", 3500, 2100),
         ("ADATA", "XPG LEGEND 960", "SSD", "M.2 2280", 1000, "PCIe 4.0 x4", 7400, 6000),
         ("Samsung", "980 PRO", "SSD", "M.2 2280", 1000, "PCIe 4.0 x4", 7000, 5000),
-        ("Samsung", "990 PRO", "SSD", "M.2 2280", 2000, "PCIe 4.0 x4", 7450, 6900)
+        ("Samsung", "990 PRO", "SSD", "M.2 2280", 2000, "PCIe 4.0 x4", 7450, 6900),
+        ("WD", "Black SN850X", "SSD", "M.2 2280", 1000, "PCIe 4.0 x4", 7300, 6300),
+        ("Crucial", "P3 Plus", "SSD", "M.2 2280", 2000, "PCIe 4.0 x4", 5000, 4200),
+        ("Seagate", "IronWolf", "HDD", "3.5\"", 8000, "SATA III", 214, 210),
+        ("Kingston", "KC3000", "SSD", "M.2 2280", 2048, "PCIe 4.0 x4", 7000, 6000),
     ]
 
     for item in storages_data:
@@ -276,7 +311,12 @@ def seed_db():
             read_speed=item[6], write_speed=item[7]
         )
 
-    print("\n🎉 Все 140 объектов успешно импортированы! Данные абсолютно точные и готовы к фильтрации.")
+    total = (
+        CPU.objects.count() + Motherboard.objects.count() + Videocard.objects.count()
+        + Memory.objects.count() + CPU_Cooler.objects.count() + Power_Supply.objects.count()
+        + Storage.objects.count()
+    )
+    print(f"\n🎉 Импортировано комплектующих: {total}. Данные готовы к фильтрации и проверкам совместимости.")
 
 if __name__ == '__main__':
     seed_db()

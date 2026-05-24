@@ -2,24 +2,54 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+.Python
 .venv/
 venv/
 ENV/
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
 
 # Django
 db.sqlite3
 db.sqlite3-journal
 media/
 staticfiles/
+local_settings.py
+
+# Secrets and local env (never commit)
 .env
+.env.*
+!.env.example
+
+# Node / frontend build (frontend/.gitignore also applies under frontend/)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
 
 # Docker
-.docker-compose.override.yml
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
 
 # IDEs
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini

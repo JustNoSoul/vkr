@@ -12,7 +12,14 @@ class RegisterView(APIView):
         if serializer.is_valid():
             serializer.save()
             return Response({"message": "Пользователь успешно зарегистрирован"}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        errors = serializer.errors
+        if 'username' in errors:
+            detail = 'Такой логин уже занят или указан некорректно.'
+        elif 'password' in errors:
+            detail = 'Пароль не подходит под требования безопасности.'
+        else:
+            detail = 'Проверьте введённые данные регистрации.'
+        return Response({'detail': detail, 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CurrentUserView(APIView):

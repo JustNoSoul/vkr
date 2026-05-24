@@ -1,10 +1,18 @@
 from rest_framework import viewsets
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 from .models import *
 from .serializers import *
 from .permissions import IsConfigurationOwner
-from rest_framework.permissions import IsAuthenticated
+from .services import check_configuration_limit
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
-from .serializers import ConfigurationSerializer, ConfigurationSaveSerializer
+from .serializers import (
+    ConfigurationSerializer,
+    ConfigurationSaveSerializer,
+    PublicConfigurationSerializer,
+)
 
 class CPUViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = CPU.objects.all()
@@ -33,6 +41,19 @@ class PowerSupplyViewSet(viewsets.ReadOnlyModelViewSet):
 class StorageViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Storage.objects.all()
     serializer_class = StorageSerializer
+class PublicConfigurationViewSet(viewsets.ReadOnlyModelViewSet):
+    """Готовые сборки администратора (is_public=True), доступны без входа."""
+    serializer_class = PublicConfigurationSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return (
+            Configuration.objects.filter(is_public=True)
+            .prefetch_related('items__component')
+            .order_by('-id')
+        )
+
+
 class ConfigurationViewSet(viewsets.ModelViewSet):
     queryset = Configuration.objects.all()
     permission_classes = [IsAuthenticated, IsConfigurationOwner]
@@ -49,6 +70,25 @@ class ConfigurationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        limit_msg = check_configuration_limit(request.user)
+        if limit_msg:
+            return Response({'detail': limit_msg}, status=400)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        output = ConfigurationSerializer(instance, context=self.get_serializer_context())
+        return Response(output.data, status=201)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        output = ConfigurationSerializer(instance, context=self.get_serializer_context())
+        return Response(output.data)
 
 
 class ConfigItemViewSet(viewsets.ModelViewSet):
@@ -106,3 +146,33 @@ class StorageViewSet(viewsets.ModelViewSet):
     serializer_class = StorageSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_class = StorageFilter
+
+
+class PerformanceEstimateView(APIView):
+    """Соответствие минимальным требованиям типичных приложений."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .performance_estimate import estimate_performance
+
+        data = request.data
+        ram_modules = data.get('ram_modules_gb') or []
+        if isinstance(ram_modules, list) and ram_modules:
+            ram_total = sum(int(x) for x in ram_modules if x)
+        else:
+            ram_total = int(data.get('ram_total_gb') or 16)
+
+        result = estimate_performance(
+            cpu_manufacturer=data.get('cpu_manufacturer', ''),
+            cpu_name=data.get('cpu_name', ''),
+            gpu_manufacturer=data.get('gpu_manufacturer', ''),
+            gpu_name=data.get('gpu_name', ''),
+            gpu_chipset=data.get('gpu_chipset'),
+            gpu_vram_gb=int(data.get('gpu_vram_gb') or data.get('gpu_capacity') or 8),
+            cpu_cores=int(data.get('cpu_cores') or 6),
+            cpu_boost_ghz=float(data.get('cpu_boost_ghz') or 3.5),
+            ram_total_gb=ram_total,
+            mem_channels=int(data.get('mem_channels') or 2),
+            mem_frequency=int(data.get('mem_frequency') or data.get('ram_mhz') or 3200),
+        )
+        return Response(result)

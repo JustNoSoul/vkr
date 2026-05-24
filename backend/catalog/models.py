@@ -84,6 +84,7 @@ class Storage(Component):
 class Configuration(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default='')
     is_public = models.BooleanField(default=False)
     total_power = models.IntegerField(default=0)
     has_rgb = models.BooleanField(default=False)
